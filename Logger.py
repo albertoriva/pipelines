@@ -19,7 +19,8 @@ class Logger():
       self.setEcho(echo)
 
   def close(self):
-      self.out.close()
+      if self.out:
+          self.out.close()
 
   def setLogfile(self, filename, overwrite=True):
       self.outfile = filename

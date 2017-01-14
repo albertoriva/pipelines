@@ -2,46 +2,53 @@
 # University of Florida
 
 import sys
-import Library
-
-REGISTRY = {'test':       Library.testLine,
-            'samples':    Library.Samples,
-            'rnasamples': Library.RNAseqSamples,
-            'trim':       Library.Trimmer,
-            'fastqcount': Library.FASTQcounter,
-            'star':       Library.StarAligner,
-            'startx':     Library.StarAlignerTx,
-            'bamcount':   Library.BAMcounter,
-            'markdup':    Library.Markdup,
-            'merge':      Library.BAMmerger,
-            'bamcat':     Library.BAMconcatenator,
-            'rsemquant':  Library.RSEMquant,
-            'rsemdiff':   Library.RSEMdiff,
-            'bamtowig':   Library.BAMtoWig,
-            'macs':       Library.MACScallpeak,
-            'csfilter':   Library.CSfilter,
-            'mmap':       Library.MMAP,
-            'cscall':     Library.CScall,
-            'mcomp':      Library.MCOMP,
-            'genemeth':   Library.GeneMeth,
-            'methplots':  Library.MethPlots,
-            'rencontig':  Library.ContigRenamer,
-            'refindex':   Library.IndexReference,
-            'prokka':     Library.Prokka,
-            'mauve':      Library.Mauve,
-            'progmauve':  Library.ProgMauve,
-            'roary':      Library.Roary,
-            'snpsites':   Library.SNPsites
-}
+import importlib
 
 class Director():
     """This class coordinates the execution of the pipeline."""
 
     actor = None
-    steps = []
+    steplist = []               # Names of steps
+    steps = []                  # Actual step objects
+    registry = {}
 
-    def __init__(self, actor):
+    def __init__(self, actor, library="Library"):
         self.actor = actor
+        self.steplist = []
+        self.steps = []
+        lib = importlib.import_module(library)
+        self.registry = lib.REGISTRY
+
+    def setSteps(self, steplist):
+        """Set the list of steps to be performed by this dirctor to `steplist'. Steplist
+can be either a list of strings or a string containing comma-separated step names (e.g.
+"step1, step2, step3". Use the step() method to know if a step should be executed."""
+        if type(steplist).__name__ == 'str':
+            steplist = [ i.strip(" ") for i in steplist.split(",") ]
+        self.steplist = steplist
+        self.notifiedSteps = []
+
+    def stepPresent(self, step):
+        return (step in self.steplist) or ("-"+step in self.steplist) or ("no"+step in self.steplist)
+
+    def stepDry(self, step):
+        return ("-"+step in self.steplist) or ("no"+step in self.steplist)
+
+    # def step(self, wanted):
+    #     if wanted in self.steplist:
+    #         if not wanted in self.notifiedSteps: # should we notify?
+    #             print "Performing step `{}'.".format(wanted)
+    #             self.notifiedSteps.append(wanted)
+    #         return True
+    #     else:
+    #         if not wanted in self.notifiedSteps:
+    #             print "Skipping step `{}'.".format(wanted)
+    #             self.notifiedSteps.append(wanted)
+    #         return False
+
+    def step(self, key, **properties):
+        if self.stepPresent(key):
+            self.add(key, dry=self.stepDry(key), **properties)
 
     def add(self, key, **properties):
         dkey = key
@@ -49,12 +56,12 @@ class Director():
         if p > -1:
             dkey = key[:p]
 
-        if dkey in REGISTRY:
-            cls = REGISTRY[dkey]
+        if dkey in self.registry:
+            cls = self.registry[dkey]
             line = cls(self.actor, key=key, properties=properties)
             self.steps.append(line)
         else:
-            sys,stderr.write("Warning: no Line with key `{}'.\n".format(dkey))
+            sys.stderr.write("Warning: no Line with key `{}'.\n".format(dkey))
         return line
 
     def startAt(self, startkey):

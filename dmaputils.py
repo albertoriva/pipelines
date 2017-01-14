@@ -3,6 +3,8 @@
 
 from glob import glob
 
+import Utils
+
 def initializeContrasts(ACT):
     for c in ACT.sc.contrasts:
         label = c['label']
@@ -246,15 +248,16 @@ def drawBEDplots(ACT, cond, dry):
     ACT.mkdir("plots")
     name = cond['name']
     htmlfile = "{}-metyhlation.html".format(name)
+    pngfilelist = "pngfiles-" + name
     cond['methplots'] = htmlfile
     bedfile = cond['callbed']
     outpatt = "plots/methprofile-" + name + "-{}.png"
     title = "Methylation profile - {}"
     if not dry:
-        ACT.shell('module load dibig_tools; plotter -o {} -f $HPC_DIBIGTOOLS_DIR/lib/fonts/liberation/ bed -i {} -title "{}" -xlabel "Chromosome position" -ylabel "% methylation" > pngfiles1', 
-                  outpatt, bedfile, title)
+        ACT.shell('module load dibig_tools; plotter -o {} -f $HPC_DIBIGTOOLS_DIR/lib/fonts/liberation/ bed -i {} -title "{}" -xlabel "Chromosome position" -ylabel "% methylation" > {}', 
+                  outpatt, bedfile, title, pngfilelist)
 
-    with open("pngfiles1", "r") as f:
+    with open(pngfilelist, "r") as f:
         plotfiles = f.readlines()
     plotfiles = [ s.strip("\n").split("\t") for s in plotfiles ]
 
@@ -306,7 +309,7 @@ def drawDMCplots(ACT, dry):
         htmlfile = "{}.vs.{}.dmc.html".format(test, ctrl)
         d['dmcplot'] = png
         d['dmcfile'] = htmlfile
-        title = "Methylation profile - {}"
+        title = "Differential methylation - {}"
         if not dry:
             ACT.shell('module load dibig_tools; plotter -o {} -f $HPC_DIBIGTOOLS_DIR/lib/fonts/liberation/ dmc -i {} -xlabel "Chromosome position" -ylabel "% methylation" -title "{}" > pngfiles2',
                       png, sig, title)
@@ -321,3 +324,32 @@ def drawDMCplots(ACT, dry):
             for p in plotfiles:
                 out.write("<IMG src='{}'/><BR><BR>\n".format(p[1]))
 
+def runAvgMeth(ACT, cond1, cond2):
+    """Run the dmaptools avgmeth command con the raw files for the two conditions `cond1' and `cond2', returning a dictionary with the results."""
+    result = {}
+
+    SC = ACT.sc
+    cnd1 = SC.findCondition(cond1)
+    cnd2 = SC.findCondition(cond2)
+    out = "avgmeth.txt"
+    cmdline = "module load dibig_tools; dmaptools.py avgmeth {} {} {}".format(cnd1['matreport'], cnd2['matreport'], out)
+    ACT.shell(cmdline)
+    if ACT.checkFile(out):
+        with open(out, "r") as f:
+            for line in f:
+                line = line.rstrip("\r\n")
+                p = line.find(":")
+                if p > 0:
+                    result[line[:p]] = line[p+1:]
+    return result
+
+def runMethHist(ACT, cond1, cond2, outfile):
+    SC = ACT.sc
+    cnd1 = SC.findCondition(cond1)
+    cnd2 = SC.findCondition(cond2)
+    cmdline = "module load dibig_tools; dmaptools.py histmeth {} {} {}".format(cnd1['matreport'], cnd2['matreport'], outfile)
+    ACT.shell(cmdline)
+    if ACT.checkFile(outfile):
+        return Utils.fileToList(outfile)
+    else:
+        return None

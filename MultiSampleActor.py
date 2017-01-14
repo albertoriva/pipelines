@@ -33,7 +33,21 @@ from DibigActor import DibigActor
 
 class MultiSampleActor(DibigActor):
     sc = None                   # SampleCollection
-    log = Logger(None)          # To avoid errors in scripts that don't explicitly create one
+
+    def initFiles(self):
+        self.log.setLogfile(self.getConf("logfile"))
+        self.log.setEcho('stdout')
+        self.log.logStart(self.title)
+
+        ## Ensure we don't have old .done files lying around
+        self.shell("rm -f *.done")
+
+        ## Initialize .files
+        self.shell('rm -f .files; echo "*.html\n*.png\n*.pdf\n*.xlsx\n*.csv\n*.css\n*.js\n*.bed\n*.bedGraph\n*.conf" > .files')
+
+    def cleanup(self):
+        self.log.logEnd()
+        self.log.close()
 
     def runSickle(self, run=True, fastqc=True):
         """Run sickle on the fastq files in all readsets. Pre-trim files are saved under the 'pretrimleft' and 'pretrimright' (for paired-end)

@@ -71,6 +71,9 @@ def safeRemoveFile(filename):
         except OSError:
             pass
 
+def filenameNoExt(s):
+    return os.path.splitext(os.path.basename(s))[0]
+
 def parseLine(line):
     return line.rstrip("\r\n").split("\t")
 
@@ -115,6 +118,18 @@ in the first column and as values the contents of the specified `column'
                 result[parsed[0]] = parsed[column]
     return result
 
+def fileToList(filename, delimiter='\t', hdr=True):
+    """Read delimited file `filename' and return its contents as a list of lists. If `hdr' is True (the
+default) skip the first line."""
+    result = []
+    with open(filename, "r") as f:
+        if hdr:
+            f.readline()
+        for line in f:
+            line = line.rstrip("\r\n").split(delimiter)
+            result.append(line)
+    return result
+
 def linkify(url, text=None):
     if not text:
         text = url
@@ -132,6 +147,7 @@ def fastqcPath(basedir, f):
     return linkify(target, text=base)
 
 ### Parser for GTF files
+### *** (this should be replaced with the parsers in genplot/genes)
 
 def parseGTF(gtf):
     genes = {}
@@ -150,12 +166,17 @@ def parseGTFrecord(fields, genes, transcripts):
     if what == 'gene':
         anndict = parseAnnotations(fields[8])
         gid = anndict['gene_id']
-        genes[gid] = [ gid, anndict['gene_biotype'], anndict['gene_name'] ]
+        genes[gid] = {'gene_id': gid,
+                      'gene_biotype': anndict['gene_biotype'],
+                      'gene_name': anndict['gene_name'] }
 
     elif what == 'transcript':
         anndict = parseAnnotations(fields[8])
         tid = anndict['transcript_id']
-        transcripts[tid] = [ tid, anndict['gene_biotype'], anndict['transcript_name'], anndict['gene_name'] ]
+        transcripts[tid] = {'transcript_id': tid,
+                            'gene_biotype': anndict['gene_biotype'],
+                            'transcript_name': anndict['transcript_name'],
+                            'gene_name': anndict['gene_name'] }
 
 def parseAnnotations(ann):
     anndict = {}
@@ -166,4 +187,65 @@ def parseAnnotations(ann):
             anndict[pair[0]] = pair[1].strip('"')
     return anndict
 
+### Adding annotations to a file
+
+def annotateFile(infile, outfile, table, annot=[], annotNames=[], idcol=0, idname=False, missing='???'):
+    """Read each line of file `infile' and look up the identifier in column `idcol' in 
+dictionary `table'. If found, add the entries listed in `fields' to the current line.
+Then write each line to `outfile'. If `idname' is specified, it is added to the front of the new header line
+(to account for the fact that tables produced by R don't have a header for the first column)."""
+    if len(annot) != len(annotNames):
+        sys.stderr.write("annotateFile: the length of fields and fieldNames should be the same.\n")
+        return
+        
+    m = [missing]*len(annot)
+    print "Annotating file {} into {}.".format(infile, outfile)
+    with open(outfile, "w") as out:
+        with open(infile, "r") as f:
+            hdr = parseLine(f.readline())
+            if idname:
+                hdr = [idname] + hdr
+            ohdr = hdr[0:idcol+1] + annotNames + hdr[idcol+1:] # build output header line
+            out.write("\t".join(ohdr) + "\n")
+            for line in f:
+                fields = parseLine(line)
+                idv = fields[idcol].strip('"')
+                if idv in table:
+                    ann = table[idv]
+                    ofields = fields[0:idcol+1]
+                    for a in annot:
+                        if a in ann:
+                            ofields.append(ann[a])
+                        else:
+                            ofields.append(missing)
+                    ofields += fields[idcol+1:]
+                else:
+                    ofields = fields[0:idcol+1] + m + fields[idcol+1:]
+                out.write("\t".join(ofields) + "\n")
+
+### For ma.py
+
+def extractExpressions(sigfile, exprfile, outfile, sigidcol=0, sigfccol=1, idcol=0, datacol=1, maxrows=100):
+    genes = []
+
+    # Read list of genes with FCs
+    with open(sigfile, "r") as f:
+        f.readline()
+        for line in f:
+            parsed = line.rstrip("\r\n").split("\t")
+            gid = parsed[sigidcol]
+            fc = float(parsed[sigfccol])
+            genes.append((abs(fc), gid))
+
+    genes.sort(key=lambda g: g[0], reverse=True)
+    wanted = [ g[1] for g in genes[:maxrows] ]
+
+    with open(outfile, "w") as out:
+        with open(exprfile, "r") as f:
+            hdr = f.readline().rstrip("\r\n").split("\t")
+            out.write("Gene\t" + "\t".join(hdr[datacol:]) + "\n")
+            for line in f:
+                parsed = line.rstrip("\r\n").split("\t")
+                if parsed[0] in wanted:
+                    out.write(parsed[idcol] + "\t" + "\t".join(parsed[datacol:]) + "\n")
 

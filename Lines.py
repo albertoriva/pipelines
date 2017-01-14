@@ -1,6 +1,8 @@
 # (c) 2015, A. Riva, DiBiG, ICBR Bioinformatics
 # University of Florida
 
+import os
+
 class Line():
     """This class is the parent of all classes representing operations performed by the pipelines.
 Its methods all do nothing and return True."""
@@ -12,16 +14,29 @@ Its methods all do nothing and return True."""
     status = ""
     waiters = []
     properties = {}
+    tempfiles = []
 
     def __init__(self, act, key="", properties={}):
         self.actor = act
         self.key = key
         self.status = ""
         self.waiters = []
+        self.tempfiles = []
         self.properties = properties
         if 'dry' in properties:
             self.dry = properties['dry']
         self.Setup()
+
+    def tempfile(self, filename):
+        self.tempfiles.append(filename)
+        return filename
+
+    def cleanTempfiles(self):
+        for f in self.tempfiles:
+            try:
+                os.remove(f)
+            except:
+                pass
 
     def Setup(self):
         """The Setup() method is called by init."""
