@@ -2,8 +2,6 @@
 # University of Florida
 
 import os
-import time
-import math
 
 import Utils
 from Lines import Line

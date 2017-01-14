@@ -6,7 +6,6 @@
 from SampleCollection import SampleCollection
 from Logger import Logger
 from Director import Director
-import dmaputils
 
 D = Director(ACT)
 

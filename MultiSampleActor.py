@@ -1,7 +1,6 @@
 # An actor that includes a SampleCollection, to process
 # multiple samples possibly having multiple replicates each.
 
-import sys
 import os.path
 from Logger import Logger
 

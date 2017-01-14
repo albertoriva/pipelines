@@ -1,10 +1,8 @@
 # Actor
 
 import os
-import sys
 import os.path
 import genereplib
-import Logger
 
 ### ToDo:
 ###   allow using organism name instead of TF file for known ones

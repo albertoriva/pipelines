@@ -1,8 +1,6 @@
 # An actor for ChIPseq experiments
 
-import Logger
 from MultiSampleActor import MultiSampleActor
-from SampleCollection import SampleCollection
 
 class ChipSeqActor(MultiSampleActor):
     

@@ -3,8 +3,6 @@
 # (c) 2016, A. Riva, DiBiG
 # ChIPseq processing pipeline, v2.0
 
-import csv
-import sys
 import os.path
 
 import Logger
