@@ -51,6 +51,7 @@ can be either a list of strings or a string containing comma-separated step name
             self.add(key, dry=self.stepDry(key), **properties)
 
     def add(self, key, **properties):
+        line = None
         dkey = key
         p = key.find(".")
         if p > -1:
@@ -88,11 +89,11 @@ from `startkey' onwards will be set to not-dry."""
                     # print "Found {}".format(s.key)
                     ok = True
 
-    def showSteps(self, wait=True):
+    def showSteps(self):
         print "Ready to run the following steps:"
         for s in self.steps:
             print "{} {}".format("-" if s.dry else "+", s.name)
-        if wait:
+        if self.actor.ask:
             print "Press Enter to start execution."
             raw_input()
 

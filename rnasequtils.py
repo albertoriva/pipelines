@@ -30,6 +30,31 @@ rnaseqtools.py matrix """)
         out.write(" > {}\n\n".format(outfile))
     return scriptfile
 
+def writeContrastMatrix(contrast, samples, ntest, nctrl, fdr, erccdb=None, mode="g"):
+    with open(contrast[mode+'rsemqsub'], "w") as out:
+        out.write("""#!/bin/bash
+#SBATCH --time=10:00:00
+#SBATCH --mem=10G
+
+module load rsem/1.2.29
+module load dibig_tools
+
+#rsem-generate-data-matrix 
+
+rnaseqtools.py matrix """)
+        if erccdb:
+            out.write(" -e -ercc " + erccdb + " -mix " + ",".join([s['mix'] for s in samples]))
+        for s in samples:
+            if mode == 'g':
+                out.write(" {}.genes.results".format(s['name']))
+            else:
+                out.write(" {}.isoforms.results".format(s['name']))
+        out.write(" > {}\n\n".format(contrast[mode+'matrix']))
+        out.write("rsem-run-ebseq {} {},{} {}\n".format(contrast[mode+'matrix'], ntest, nctrl, contrast[mode+'diff']))
+        # out.write("rsem-control-fdr --soft-threshold {} {} {}\n".format(contrast[mode+'diff'], fdr, contrast[mode+'fdr']))  # Soft threshold is confusing...
+        out.write("rsem-control-fdr {} {} {}\n".format(contrast[mode+'diff'], fdr, contrast[mode+'fdr']))
+    return contrast[mode+'rsemqsub']
+
 def filterDiff(infile, outfile, fc, translation=None, wanted=[], wantedNames=[], biotype=None):
     """Read RSEM differential expression results from `infile' and write them to `outfile', converting
 the fold changes to log2 and discarding records having log2(FC) < `fc'. If `translation' is provided
@@ -85,4 +110,6 @@ number of underexpressed, and a dictionary mapping each biotype to is number of 
         for d in data:
             out.write("\t".join(d[1:]) + "\n")
     return (ng, nup, ndown, biotypes)
+
+### Generation of hub for RNA-seq data
 

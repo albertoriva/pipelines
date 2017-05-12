@@ -3,6 +3,9 @@
 # (c) 2015, A. Riva, DiBiG
 # Differential Methylation Analysis pipeline, v2.0
 
+### TODO: convert BED to bedGraph automatically with sliding window
+### add conf file parameters for dmr
+
 from SampleCollection import SampleCollection
 from Logger import Logger
 from Director import Director
@@ -16,8 +19,8 @@ ACT.title = ACT.getConf("title")
 ACT.Prefix = ACT.getConf("label")
 ACT.reference = ACT.checkPath(ACT.getConf("reference"))
 ACT.siteindex = ACT.checkPath(ACT.getConf("siteindex"))
-ACT.mindepth = int(ACT.getConf("mindepth", default="10"))
-ACT.minsamples = int(ACT.getConf("minsamples", default="1"))
+ACT.mindepth = ACT.getConfInt("mindepth", default=10)
+ACT.minsamples = ACT.getConfInt("minsamples", default=1)
 ACT.strand = ACT.getConf("strand")
 ACT.parallel = ACT.getConf("parallel", default="1")
 ACT.rrbs = ACT.getConf("RRBS", default=None)
@@ -25,18 +28,26 @@ ACT.setSteps(ACT.getConf("steps"))
 
 ## Filtering parameters
 ACT.sites = ACT.getConf("sites", section="filter")
-ACT.amax = int(ACT.getConf("amax", section="filter", default="10000"))
-ACT.fmax = float(ACT.getConf("fmax", section="filter", default="0.05"))
+ACT.amax = ACT.getConfInt("amax", section="filter", default=10000)
+ACT.fmax = ACT.getConfFloat("fmax", section="filter", default=0.05)
 
 ## Differential methylation params
-ACT.pval = float(ACT.getConf("pval", section="diff", default=0.05))
-ACT.diff = float(ACT.getConf("diff", section="diff", default=0.3))
+ACT.pval = ACT.getConfFloat("pval", section="diff", default=0.05)
+ACT.diff = ACT.getConfFloat("diff", section="diff", default=0.3)
 ACT.genesdb = ACT.getConf("genesdb", section="diff")
 ACT.genes = ACT.getConf("genes", section="diff")
 ACT.regions = ACT.getConfList("regions", section="diff", default='pbd')
 ACT.size = ACT.getConfList("size", section="diff", default='2000')
 ACT.mode = ACT.getConfList("mode", section="diff", default='avg')
 ACT.nsites = ACT.getConfList("nsites", section="diff", default='1')
+
+## DMR parameters
+ACT.dmr_winsize = ACT.getConfInt("winsize", "dmr", 100)
+ACT.dmr_mincov  = ACT.getConfInt("mincov", "dmr", 4)
+ACT.dmr_minsites = ACT.getConfInt("minsites", "dmr", 4)
+ACT.dmr_diff     = ACT.getConfFloat("diff", "dmr", 0.2)
+ACT.dmr_pval     = ACT.getConfFloat("pval", "dmr", 0.01)
+ACT.dmr_gap      = ACT.getConfInt("gap", "dmr", 1)
 
 ## Graphics (these should be read from conf file)
 ACT.scatterplot_size = 800

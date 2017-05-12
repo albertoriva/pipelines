@@ -7,8 +7,10 @@ import Utils
 from Lines import Line
 from SampleCollection import SampleCollection
 from dmaputils import initializeContrasts, writeBSMAPscripts, writeMCOMPqsub, diffmethSummary, drawBEDplots, drawDMCplots, getCscallReport, runAvgMeth, runMethHist
-from rnasequtils import writeMatrixScript, filterDiff
+from rnasequtils import writeMatrixScript, writeContrastMatrix, filterDiff
+from chipsequtils import readHomerAnnots
 import Table
+import Intersector
 
 ### Testing
 
@@ -68,7 +70,6 @@ class Samples(Line):
         tbl1.toHTML(ACT.out)
         return True
 
-
 ### Samples manager (methylation)
 
 class MethSamples(Samples):
@@ -92,7 +93,6 @@ class RNAseqSamples(Samples):
 
         for smp in SC.samples:
             smp['mix'] = ACT.getConf('mix', section=smp['name'], default='1')
-
         LOG.log("Parsing GTF file {}", ACT.gtf)
         (ACT.gtable, ACT.txtable) = Utils.parseGTF(ACT.gtf)
         LOG.log("{} genes, {} transcripts.", len(ACT.gtable), len(ACT.txtable))
@@ -116,6 +116,7 @@ set either one to False to disable that QC step)."""
         self.qcbefore = Utils.dget('qcbefore', self.properties, self.qcbefore)
         self.qcafter = Utils.dget('qcafter', self.properties, self.qcafter)
         self.adapter = Utils.dget('adapter', self.properties, None)
+        self.minlen = Utils.dget('minlen', self.properties, None)
         return True
 
     def Execute(self):
@@ -133,6 +134,10 @@ set either one to False to disable that QC step)."""
             adapt = "ad=" + self.adapter
         else:
             adapt = ""
+        if self.minlen:
+            minlen = "minlen=" + self.minlen
+        else:
+            minlen = ""
 
         for rs in SC.readsets:
             if rs['paired']:
@@ -156,11 +161,11 @@ set either one to False to disable that QC step)."""
                     LOG.log("Calling trimmomatic on `{}' and `{}'", rs['leftpretrim'], rs['rightpretrim'])
                     LOG.log("Trimmomatic main output to `{}' and `{}'", rs['left'], rs['right'])
                     if not self.dry:
-                        tr = ACT.submit("trimmomatic.qsub {} {} {} {} {} {} {}".format(
+                        tr = ACT.submit("trimmomatic.qsub {} {} {} {} {} {} {} {}".format(
                                 rs["leftpretrim"], rs["rightpretrim"],
                                 rs["left"], rs["trunpair1"], 
                                 rs["right"], rs["trunpair2"],
-                                adapt), done="trim.@.done")
+                                adapt, minlen), done="trim.@.done")
                         ntrim += 1
                 elif props['prog'] == 'sickle':
                     print "*** not implemented yet"
@@ -189,7 +194,7 @@ set either one to False to disable that QC step)."""
                     LOG.log("Calling trimmomatic on `{}'", rs['leftpretrim'])
                     LOG.log("Trimmomatic main output to `{}'", rs['left'])
                     if not self.dry:
-                        tr = ACT.submit("trimmomatic-se.qsub {} {} {}".format(rs["leftpretrim"], rs["left"], adapt),
+                        tr = ACT.submit("trimmomatic-se.qsub {} {} {} {}".format(rs["leftpretrim"], rs["left"], adapt, minlen),
                                         done="trim.@.done")
                         ntrim += 1
                 elif props['prog'] == 'sickle':
@@ -244,10 +249,11 @@ quality control reports before and after trimming, as well as the number of read
 class Bowtie2(Line):
     name = "Bowtie2"
     version = ""
+    extra = ""                  # Extra bowtie2 options
 
     def Verify(self):
-        if self.dry:
-            return True         # Don't stop the pipeline if we're not doing this
+        #if self.dry:
+        #    return True         # Don't stop the pipeline if we're not doing this
         ACT = self.actor
         verstring = ACT.shell("module load bowtie2; bowtie2 --version|head -1")
         p = verstring.find("version")
@@ -261,6 +267,8 @@ class Bowtie2(Line):
     def Setup(self):
         ACT = self.actor
         SC = ACT.sc
+
+        self.extra = Utils.dget('extra', self.properties, self.extra)
 
         good = True
         ## Get name of Bowtie2 index for each sample
@@ -296,13 +304,16 @@ class Bowtie2(Line):
             LOG.log("Starting bowtie2 for sample {}, output to {}.", smp["name"], smp["bam"])
             if not self.dry:
                 if paired:
-                    ACT.submit("bowtie2-pe.qsub {} {} {} {}".format(smp["bt2idx"], lfq, rfq, smp["bam"]), done="bowtie2.@.done")
+                    cmdline = "bowtie2-pe.qsub sm={} {} {} {} {} {}".format(smp["name"], self.extra, smp["bt2idx"], lfq, rfq, smp["bam"])
                 else:
-                    ACT.submit("bowtie2.qsub {} {} {}".format(smp["bt2idx"], lfq, smp["bam"]), done="bowtie2.@.done")
+                    cmdline = "bowtie2.qsub sm={} {} {} {} {}".format(smp["name"], self.extra, smp["bt2idx"], lfq, smp["bam"])
+                ACT.submit(cmdline, done="bowtie2.@.done")
                 nbowtie += 1
         return ACT.wait(("bowtie2.@.done", nbowtie))
 
     def Report(self):
+        #print "printing bowtie report to {}".format(ACT.out)
+        #raw_input()
         ACT = self.actor
         SC = ACT.sc
 
@@ -361,7 +372,7 @@ class TopHat(Line):
             outdir = smp['name'] + ".tophat"
             smp["bam"] = outdir + "/accepted_hits.bam" # Name of BAM file produced by TopHat
             ACT.mkdir(outdir)
-            fqlistfile = self.tempfile(outdir + "/" + Utils.id_generator(10))
+            fqlistfile = self.tempfile(outdir + "/" + Utils.id_generator(10, prefix='tmp-'))
             lfq = []
             rfq = []
             for rs in smp['readsets']:
@@ -626,6 +637,7 @@ countseqs.py $fq > {}-$L.out
         try:
             for smp in SC.samples:
                 smptotal = 0
+                print "{} => {} readsets".format(smp['name'], len(smp['readsets']))
                 for rs in smp['readsets']:
                     cntfile = "{}-{}.out".format(self.propname, idx)
                     line = Utils.safeReadLineFromFile(cntfile, delay=2, maxtries=30)
@@ -642,7 +654,7 @@ countseqs.py $fq > {}-$L.out
                             if out:
                                 out.write("{}\t{}\n".format(rs['name'], c))
                             if log:
-                                log.log("{}: {} reads", rs['name'], c)
+                                pass # log.log("{}: {} reads", rs['name'], c)  ## Too verbose...
                     else:
                         self.status = "Warning: empty FASTQ file {}".format(cntfile)
                         good = False
@@ -663,7 +675,7 @@ countseqs.py $fq > {}-$L.out
         LOG = ACT.log
         SC = ACT.sc
 
-        id = Utils.id_generator(10)
+        id = Utils.id_generator(10, prefix='tmp-')
         self.prefix = id
         fastqnames = self.tempfile(id + "-names.txt")
         qsub = self.tempfile(id + ".qsub")
@@ -779,7 +791,7 @@ bamtools count -in $bam > {}-$L.out
         LOG = ACT.log
         SC = ACT.sc
 
-        id = Utils.id_generator(10)
+        id = Utils.id_generator(10, prefix='tmp-')
         self.prefix = id
         bamnames = self.tempfile(id + "-names.txt")
         qsub = id + ".qsub"
@@ -893,11 +905,13 @@ class BAMmerger(Line):
     byCondition = False
     indexBAM = False
     removeOriginal = False
+    bamkey = 'bam'
 
     def Setup(self):
         self.byCondition = Utils.dget('byCondition', self.properties, self.byCondition)
         self.indexBAM = Utils.dget('indexBAM', self.properties, self.indexBAM)
         self.removeOriginal = Utils.dget('remove', self.properties, self.removeOriginal)
+        self.bamkey = Utils.dget('bamkey', self.properties, self.bamkey)
         return True
 
     def Execute(self):
@@ -909,51 +923,61 @@ class BAMmerger(Line):
         nindex = 0
         for smp in SC.samples:
             newbamname = smp['name'] + ".bam"
-            if 'bam' in smp:    # We already have a per-sample BAM file
-                if smp['bam'] != newbamname: # but it doesn't have the name we want...
-                    LOG.log("Copying {} to {}", smp['bam'], newbamname)
-                    ACT.copy(smp['bam'], newbamname)
-                    smp['bam'] = newbamname
-                    if self.indexBAM and not self.dry:
-                        ACT.submit("bam-index.qsub {}".format(smp['bam']), done='index.@.done')
+            if self.bamkey in smp:    # We already have a per-sample BAM file
+                if smp[self.bamkey] != newbamname: # but it doesn't have the name we want...
+                    LOG.log("Copying {} to {}", smp[self.bamkey], newbamname)
+                    if ACT.missingOrStale(newbamname, other=smp[self.bamkey]):
+                        ACT.copy(smp[self.bamkey], newbamname)
+                    smp[self.bamkey] = newbamname
+                    if self.indexBAM and not self.dry and ACT.missingOrStale(smp[self.bamkey] + ".bai", other=smp[self.bamkey]):
+                        ACT.submit("bam-index.qsub {}".format(smp[self.bamkey]), done='index.@.done')
                         nindex += 1
             else:
-                LOG.log("Merging BAM files for sample {} into {}", smp['name'], smp['bam'])
-                cmdline = "generic.qsub bamtools merge -out " + smp['bam']
+                LOG.log("Merging BAM files for sample {} into {}", smp['name'], smp[self.bamkey])
+                cmdline = "generic.qsub bamtools merge -out " + smp[self.bamkey]
                 needed = False
                 for rs in smp['readsets']:
                     if 'bam' in rs:
                         needed = True
-                        cmdline += " -in " + rs['bam']
+                        cmdline += " -in " + rs[self.bamkey]
                 if needed:
                     cmdline += " module:bamtools"
                     if not self.dry:
                         j = ACT.submit(cmdline, done='merge.@.done')
                         nmerge += 1
-                        if self.indexBAM:
-                            ACT.submit("bam-index.qsub {}".format(smp['bam']), after=j, done='index.@.done')
+                        if self.indexBAM and ACT.missingOrStale(smp[self.bamkey] + ".bai", other=smp[self.bamkey]):
+                            ACT.submit("bam-index.qsub {}".format(smp[self.bamkey]), after=j, done='index.@.done')
                             nindex += 1
                 ACT.wait(('merge.@.done', nmerge))
 
         if self.byCondition:
             nmerge = 0
+            nindex = 0
             for cond in SC.conditions:
                 cond['bam'] = cond['name'] + ".bam"
                 LOG.log("Merging BAM files for condition {} into {}", cond['name'], cond['bam'])
-                cmdline = "generic.qsub bamtools merge -out " + cond['bam']
-                for sb in SC.conditionBAMs(cond['name']):
-                    cmdline += " -in " + sb
-                cmdline += " module:bamtools"
-                if not self.dry:
-                    j = ACT.submit(cmdline, done='cmerge.@.done')
-                    nmerge += 1
-                    if self.indexBAM:
+                j = False
+                condbams = SC.conditionBAMs(cond['name'], key=self.bamkey)
+                if ACT.missingOrStale(cond['bam'], condbams):
+                    cmdline = "generic.qsub bamtools merge -out " + cond['bam']
+                    for sb in condbams:
+                        cmdline += " -in " + sb
+                    cmdline += " module:bamtools"
+                    if not self.dry:
+                        ACT.delete(cond['bam'] + ".bai") # If we're merging, we need to re-index for sure
+                        j = ACT.submit(cmdline, done='cmerge.@.done')
+                        nmerge += 1
+                if not self.dry and self.indexBAM:
+                    if j:
                         ACT.submit("bam-index.qsub {}".format(cond['bam']), after=j, done='index.@.done')
                         nindex += 1
+                    elif ACT.missingOrStale(cond['bam'] + ".bai", other=cond['bam']):
+                        ACT.submit("bam-index.qsub {}".format(cond['bam']), done='index.@.done')
+                        nindex += 1
 
-            ACT.wait(('cmerge.@.done', nmerge))
-        ACT.wait(('index.@.done', nindex))
-        return True
+            return ACT.wait(('cmerge.@.done', nmerge), ('index.@.done', nindex))
+        else:
+            return True
 
 ### BAM merger 
 
@@ -1083,53 +1107,20 @@ class RSEMdiff(Line):
         testSamples = SC.conditionSamples(testcond)
         nctrl = len(ctrlSamples)
         ntest = len(testSamples)
-        contrast['rsemgqsub'] = gfilename = "{}.vs.{}.g.qsub".format(testcond, ctrlcond)
+        contrast['grsemqsub'] = gfilename = "{}.vs.{}.g.qsub".format(testcond, ctrlcond)
         contrast['gmatrix'] = "{}.vs.{}.gmatrix.csv".format(testcond, ctrlcond)
         contrast['gdiff'] = "{}.vs.{}.gdiff.csv".format(testcond, ctrlcond)
         contrast['gfdr'] = "{}.vs.{}.gfdr.csv".format(testcond, ctrlcond)
 
-        with open(gfilename, "w") as out:
-            out.write("""#!/bin/bash
-#SBATCH --time=10:00:00
-#SBATCH --mem=10G
+        writeContrastMatrix(contrast, testSamples + ctrlSamples, ntest, nctrl, ACT.fdr, erccdb=ACT.erccdb, mode="g")
 
-module load rsem/1.2.29
-module load dibig_tools
-
-#rsem-generate-data-matrix 
-
-rnaseqtools.py matrix """)
-            if ACT.erccdb:
-                out.write(" -e -ercc " + ACT.erccdb + " -mix " + ",".join([s['mix'] for s in testSamples + ctrlSamples]))
-            for s in testSamples + ctrlSamples:
-                out.write(" {}.genes.results".format(s['name']))
-            out.write(" > {}\n\n".format(contrast['gmatrix']))
-            out.write("rsem-run-ebseq {} {},{} {}\n".format(contrast['gmatrix'], ntest, nctrl, contrast['gdiff']))
-            out.write("rsem-control-fdr --soft-threshold {} {} {}\n".format(contrast['gdiff'], ACT.fdr, contrast['gfdr']))
-
-        contrast['rsemiqsub'] = ifilename = "{}.vs.{}.i.qsub".format(testcond, ctrlcond)
+        contrast['irsemqsub'] = ifilename = "{}.vs.{}.i.qsub".format(testcond, ctrlcond)
         contrast['imatrix'] = "{}.vs.{}.imatrix.csv".format(testcond, ctrlcond)
         contrast['idiff'] = "{}.vs.{}.idiff.csv".format(testcond, ctrlcond)
         contrast['ifdr'] = "{}.vs.{}.ifdr.csv".format(testcond, ctrlcond)
 
-        with open(ifilename, "w") as out:
-            out.write("""#!/bin/bash
-#SBATCH --time=10:00:00
-#SBATCH --mem=10G
+        writeContrastMatrix(contrast, testSamples + ctrlSamples, ntest, nctrl, ACT.fdr, erccdb=ACT.erccdb, mode="i")
 
-module load rsem/1.2.29
-module load dibig_tools
-
-#rsem-generate-data-matrix 
-
-rnaseqtools.py matrix """)
-            if ACT.erccdb:
-                out.write(" -e -ercc " + ACT.erccdb + " -mix " + ",".join([s['mix'] for s in testSamples + ctrlSamples]))
-            for s in testSamples + ctrlSamples:
-                out.write(" {}.isoforms.results".format(s['name']))
-            out.write(" > {}\n\n".format(contrast['imatrix']))
-            out.write("rsem-run-ebseq {} {},{} {}\n".format(contrast['imatrix'], ntest, nctrl, contrast['idiff']))
-            out.write("rsem-control-fdr {} {} {}\n".format(contrast['idiff'], ACT.fdr, contrast['ifdr']))
         return (gfilename, ifilename)
 
     def Execute(self):
@@ -1154,19 +1145,30 @@ rnaseqtools.py matrix """)
         allfinalg = []
         allfinalc = []
         allfinali = []
+        all2finalg = []
+        all2finalc = []
+        all2finali = []
         mergecmdline = "module load dibig_tools; rnaseqtools.py merge "
+        allexpcmdline = "module load dibig_tools; rnaseqtools.py allexp -o allExpressions.in.csv "
         LOG.log("Generating final differential expression tables.")
         for contr in SC.contrasts:
+            allexpcmdline += " " + contr['gmatrix']
             ctrlcond = contr['control']
             testcond = contr['test']
             vs = "{}.vs.{}".format(testcond, ctrlcond)
             contr['genefinal'] =   vs + ".geneDiff.csv"
             contr['codingfinal'] = vs + ".codinggeneDiff.csv"
             contr['isofinal'] =    vs + ".isoDiff.csv"
+            contr['allgenefinal'] = vs + ".allGeneDiff.csv"
+            contr['allcodingfinal'] = vs + ".allCodingDiff.csv"
+            contr['allisofinal'] = vs + ".allIsoDiff.csv"
             mergecmdline += vs + " "
             allfinalg.append(contr['genefinal'])
             allfinalc.append(contr['codingfinal'])
             allfinali.append(contr['isofinal'])
+            all2finalg.append(contr['allgenefinal'])
+            all2finalc.append(contr['allcodingfinal'])
+            all2finali.append(contr['allisofinal'])
             contr['ngdiff'] = filterDiff(contr['gfdr'], contr['genefinal'], ACT.fc, translation=ACT.gtable,
                                          wanted=['gene_id', 'gene_biotype', 'gene_name'],
                                          wantedNames=["ENSG", "Biotype", "Gene"])
@@ -1177,19 +1179,50 @@ rnaseqtools.py matrix """)
             contr['nidiff'] = filterDiff(contr['ifdr'], contr['isofinal'], ACT.fc, translation=ACT.txtable,
                                          wanted=['transcript_id', 'gene_biotype', 'transcript_name', 'gene_name'],
                                          wantedNames=["ENST", "Biotype", "Transcript", "Gene"])
+            contr['agdiff'] = filterDiff(contr['gdiff'], contr['allgenefinal'], 0, translation=ACT.gtable,
+                                         wanted=['gene_id', 'gene_biotype', 'gene_name'],
+                                         wantedNames=["ENSG", "Biotype", "Gene"])
+            contr['acdiff'] = filterDiff(contr['gdiff'], contr['allcodingfinal'], 0, translation=ACT.gtable,
+                                         wanted=['gene_id', 'gene_biotype', 'gene_name'],
+                                         wantedNames=["ENSG", "Biotype", "Gene"],
+                                         biotype='protein_coding')
+            contr['aidiff'] = filterDiff(contr['gdiff'], contr['allisofinal'], 0, translation=ACT.gtable,
+                                         wanted=['gene_id', 'gene_biotype', 'gene_name'],
+                                         wantedNames=["ENSG", "Biotype", "Gene"])
         LOG.log("Executing: {}", mergecmdline)
         ACT.shell(mergecmdline)
+        LOG.log("Executing: {}", allexpcmdline)
+        ACT.shell(allexpcmdline)
         os.rename("merged.geneDiff.csv", "merged.geneDiff.in.csv")
         os.rename("merged.codinggeneDiff.csv", "merged.codinggeneDiff.in.csv")
         os.rename("merged.isoDiff.csv", "merged.isoDiff.in.csv")
+        Utils.annotateFile("allExpressions.in.csv", "allExpressions.csv", ACT.gtable, annot=['gene_name', 'gene_biotype'], annotNames=['Gene', 'Biotype'])
         Utils.annotateFile("merged.geneDiff.in.csv", "merged.geneDiff.csv", ACT.gtable, annot=['gene_name', 'gene_biotype'], annotNames=['Gene', 'Biotype'])
         Utils.annotateFile("merged.codinggeneDiff.in.csv", "merged.codinggeneDiff.csv", ACT.gtable, annot=['gene_name', 'gene_biotype'], annotNames=['Gene', 'Biotype'])
         Utils.annotateFile("merged.isoDiff.in.csv", "merged.isoDiff.csv", ACT.txtable, annot=['transcript_name', 'gene_name', 'gene_biotype'],
                            annotNames=['Transcript', 'Gene', 'Biotype'])
-        ACT.shell("module load dibig_tools; csvtoxls.py merged.allDiff.xlsx -q merged.geneDiff.csv merged.codinggeneDiff.csv merged.isoDiff.csv")
-        ACT.shell("module load dibig_tools; csvtoxls.py genediff.xlsx -q {}".format(" ".join(allfinalg)))
-        ACT.shell("module load dibig_tools; csvtoxls.py codingdiff.xlsx -q {}".format(" ".join(allfinalc)))
-        ACT.shell("module load dibig_tools; csvtoxls.py isodiff.xlsx -q {}".format(" ".join(allfinali)))
+        if ACT.missingOrStale("allExpressions.xlsx", other="allExpressions.csv"):
+            ACT.shell("module load dibig_tools; csvtoxls.py allExpressions.xlsx -q allExpressions.csv")
+        if ACT.missingOrStale("merged.allDiff.xlsx", other=["merged.geneDiff.csv", "merged.codinggeneDiff.csv", "merged.isoDiff.csv"]):
+            ACT.shell("module load dibig_tools; csvtoxls.py merged.allDiff.xlsx -q merged.geneDiff.csv merged.codinggeneDiff.csv merged.isoDiff.csv")
+        if ACT.missingOrStale("genediff.xlsx", other=allfinalg):
+            ACT.shell("module load dibig_tools; csvtoxls.py genediff.xlsx -q {}".format(" ".join(allfinalg)))
+        if ACT.missingOrStale("codingdiff.xlsx", other=allfinalc):
+            ACT.shell("module load dibig_tools; csvtoxls.py codingdiff.xlsx -q {}".format(" ".join(allfinalc)))
+        if ACT.missingOrStale("isodiff.xlsx", other=allfinali):
+            ACT.shell("module load dibig_tools; csvtoxls.py isodiff.xlsx -q {}".format(" ".join(allfinali)))
+        if ACT.missingOrStale("allgenediff.xlsx", other=all2finalg):
+            ACT.shell("module load dibig_tools; csvtoxls.py allgenediff.xlsx -q {}".format(" ".join(all2finalg)))
+        if ACT.missingOrStale("allcodingdiff.xlsx", other=all2finalc):
+            ACT.shell("module load dibig_tools; csvtoxls.py allcodingdiff.xlsx -q {}".format(" ".join(all2finalc)))
+        if ACT.missingOrStale("allisodiff.xlsx", other=all2finali):
+            ACT.shell("module load dibig_tools; csvtoxls.py allisodiff.xlsx -q {}".format(" ".join(all2finali)))
+
+
+        # Compute intersections
+        i = Intersector.Intersector(SC.contrasts, "codingfinal")
+        i.splitUpDown()
+        i.writeIntersectScript("int.sh")
         return True
 
     def Report(self):
@@ -1213,6 +1246,7 @@ genes in each contrast with <b>abs(log<inf>2</inf>(FC)) >= {}</b> and <b>FDR-cor
                           Utils.linkify(contr['gmatrix'])])
         tbl4.toHTML(ACT.out)
         ACT.file("codingdiff.xlsx", description="Excel file containing differentially expressed genes for all contrasts (one sheet per contrast). Only includes coding genes.")
+        ACT.file("allcodingdiff.xlsx", description="Excel file containing differential expression values for all genes in all contrasts (one sheet per contrast). Only includes coding genes.")
 
         ACT.reportf("""The following table reports results from the same differential analysis as above, but includes all biotypes instead of coding genes only.""")
 
@@ -1229,6 +1263,8 @@ genes in each contrast with <b>abs(log<inf>2</inf>(FC)) >= {}</b> and <b>FDR-cor
                            Utils.linkify(contr['gmatrix'])])
         tbl4b.toHTML(ACT.out)
         ACT.file("genediff.xlsx", description="Excel file containing differentially expressed genes for all contrasts (one sheet per contrast). Includes all genes and pseudo-genes.")
+        ACT.file("allgenediff.xlsx", description="Excel file containing differential expression values for all genes in all contrasts (one sheet per contrast). Includes all genes and pseudo-genes.")
+        ACT.file("allExpressions.xlsx", description="Excel file containing normalized expression values for all genes in all conditions.")
 
         ACT.scene("Differential expression - isoform level")
         ACT.reportf("""Differential isoform expression was analyzed using <b>{}</b>. The following table reports the number of differentially expressed 
@@ -1247,6 +1283,7 @@ isoforms in each contrast with <b>abs(log<inf>2</inf>(FC)) >= {}</b> and <b>FDR-
                           Utils.linkify(contr['imatrix']) ])
         tbl5.toHTML(ACT.out)
         ACT.file("isodiff.xlsx", description="Excel file containing differentially expressed isoforms for all contrasts (one sheet per contrast).")
+        ACT.file("allisodiff.xlsx", description="Excel file containing differential expression values for all isoforms in all contrasts (one sheet per contrast).")
 
         ACT.scene("Differential expression - combined files")
         ACT.reportf("""The following file contains <i>merged</i> differential expression data. The first sheet contains fold changes for all genes that were
@@ -1264,31 +1301,35 @@ class BAMtoWig(Line):
     window = 100
     scale = 1000000000
     countsfile = "afterCounts.csv"
+    subtitle = "transcriptome"
+    bamkey = "bam"
 
     def Setup(self):
+        self.bamkey = Utils.dget('bamkey', self.properties, self.bamkey)
         self.scale = int(Utils.dget('scale', self.properties, self.scale))
         self.window = int(Utils.dget('window', self.properties, self.window))
         self.countsfile = Utils.dget('countsfile', self.properties, self.countsfile)
+        self.subtitle = Utils.dget('subtitle', self.properties, self.subtitle)
         return True
 
     def Execute(self):
-        return True
-
-    def PostExecute(self):      # done in postexecute so we'll have bam counts
+        #def PostExecute(self):      # done in postexecute so we'll have bam counts *** NO: replace with idxstats
         ACT = self.actor
         LOG = ACT.log
         SC = ACT.sc
 
-        LOG.log("Loading BAM counts from {}", self.countsfile)
-        counts = Utils.fileToDict(self.countsfile)
+        #LOG.log("Loading BAM counts from {}", self.countsfile)
+        #counts = Utils.fileToDict(self.countsfile)
         nwig = 0
         for smp in SC.samples:
             name = smp['name']
             smp['wigfile'] = name + ".wig"
-            LOG.log("Writing WIG file for {} to {}", smp['bam'], smp['wigfile'])
+            LOG.log("Writing WIG file for {} to {}", smp[self.bamkey], smp['wigfile'])
             if not self.dry:
-                ACT.submit("""generic.qsub bamToWig.py -o {} -n {} -w {} -s {} -t {} -d "{} transcriptome" {} module:dibig_tools module:samtools""".format(
-                        smp['wigfile'], counts[name], self.window, self.scale, name, name, smp['bam']), done="wig.@.done")
+                nreads = Utils.countReadsInBAM(smp[self.bamkey])
+                LOG.log("Number of reads in {}: {}", smp[self.bamkey], nreads)
+                ACT.submit("""generic.qsub bamToWig.py -o {} -n {} -w {} -s {} -t {} -d \"{}\" {} module:dibig_tools module:samtools""".format(
+                        smp['wigfile'], nreads, self.window, self.scale, name, self.subtitle, smp[self.bamkey]), done="wig.@.done")
                 nwig += 1
 
         # Do we also have per-condition BAM files?
@@ -1297,14 +1338,11 @@ class BAMtoWig(Line):
                 name = cond['name']
                 cond['wigfile'] = name + ".wig"
                 LOG.log("Writing WIG file for {} to {}", cond['bam'], cond['wigfile'])
-                # Hack to find the total number of reads per condition
-                nreads = 0
-                for smp in SC.conditionSamples(cond):
-                    nreads += counts[smp['name']]
-                LOG.log("Total number of reads for {}: {}", name, nreads)
                 if not self.dry:
-                    ACT.submit("""generic.qsub bamToWig.py -o {} -n {} -w {} -s {} -t {} -d "{} transcriptome" {} module:dibig_tools module:samtools""".format(
-                            cond['wigfile'], nreads, self.window, self.scale, name, name, cond['bam']), done="wig.@.done")
+                    nreads = Utils.countReadsInBAM(cond['bam'])
+                    LOG.log("Total number of reads for {}: {}", name, nreads)
+                    ACT.submit("""generic.qsub bamToWig.py -o {} -n {} -w {} -s {} -t {} -d \"{}\" {} module:dibig_tools module:samtools""".format(
+                            cond['wigfile'], nreads, self.window, self.scale, name, self.subtitle, cond['bam']), done="wig.@.done")
                     nwig += 1
 
         return ACT.wait(("wig.@.done", nwig))
@@ -1346,18 +1384,18 @@ class MACScallpeak(Line):
         for contrast in SC.contrasts:
             ctrlcond = contrast['control']
             testcond = contrast['test']
-            name = "{}.vs.{}".format(testcond, ctrlcond)
             contrast['macsdir'] = macsdir = "{}.vs.{}.macs".format(testcond, ctrlcond)
             cbams = ",".join(SC.conditionBAMs(ctrlcond))
             tbams = ",".join(SC.conditionBAMs(testcond))
+            if ACT.fdr:
+                pval = "pval={}".format(ACT.fdr)
+            else:
+                pval = ""
             if not self.dry:
-                ACT.submit("macs-diff.qsub {} {} {} {}".format(name, macsdir, tbams, cbams), done="macs.@.done")
+                ACT.submit("macs-diff.qsub {} {} {} {} {}".format(contr['name'], macsdir, tbams, cbams, pval), done="macs.@.done")
                 nmacs += 1
-        return ACT.wait(("macs.@.done", nmacs))
+        ACT.wait(("macs.@.done", nmacs))
 
-    def PostExecute(self):
-        ACT = self.actor
-        SC = ACT.sc
         for contrast in SC.contrasts:
             ctrlcond = contrast['control']
             testcond = contrast['test']
@@ -1365,24 +1403,25 @@ class MACScallpeak(Line):
             pileup = contrast['macsdir'] + "/" + name + "_treat_pileup.bdg"
             pileup2 = contrast['macsdir'] + "/" + name + ".bedGraph"
             contrast['macsPileup'] = pileup2
-            if os.path.isfile(pileup):
+            if os.path.isfile(pileup) and ACT.missingOrStale(pileup2, other=pileup):
                 with open(pileup2, "w") as out:
                     out.write("track type=bedGraph\n")
-                ACT.shell("sort -k1,1 -k2,2n {} >> {}".format(pileup, pileup2))
+                ACT.shell("psort -k1,1 -k2,2n {} >> {}".format(pileup, pileup2))
             summits = contrast['macsdir'] + "/" + name + "_summits.bed"
             summits2 = contrast['macsdir'] + "/" + name + ".summits.bedGraph"
             contrast['macsSummits'] = summits2
-            if os.path.isfile(summits):
+            if os.path.isfile(summits) and ACT.missingOrStale(summits2, other=summits):
                 with open(summits2, "w") as out:
                     out.write("track type=bedGraph\n")
-                ACT.shell("cut -f 1,2,3,5 {} | sort -k1,1 -k2,2n >> {}".format(summits, summits2))
+                ACT.shell("cut -f 1,2,3,5 {} | psort -k1,1 -k2,2n | mergeRegions.py >> {}".format(summits, summits2))
             narrow = contrast['macsdir'] + "/" + name + "_peaks.narrowPeak"
             narrow2 = contrast['macsdir'] + "/" + name + ".npeaks.bedGraph"
             contrast['macsNarrow'] = narrow2
-            if os.path.isfile(narrow):
+            if os.path.isfile(narrow) and ACT.missingOrStale(narrow2, other=narrow):
                 with open(narrow2, "w") as out:
                     out.write("track type=bedGraph\n")
-                ACT.shell("cut -f 1,2,3,5 {} | sort -k1,1 -k2,2n >> {}".format(narrow, narrow2))
+                ACT.shell("cut -f 1,2,3,5 {} | psort -k1,1 -k2,2n | mergeRegions.py >> {}".format(narrow, narrow2))
+            print contrast
         return True
 
     def Report(self):
@@ -1403,6 +1442,270 @@ All files are in bedGraph format.""".format(self.version))
                          Utils.linkify(contr['macsNarrow']),
                          Utils.linkify(contr['macsSummits']) ])
         tbl.toHTML(ACT.out)
+        return True
+
+### Homer
+
+class HomerTags(Line):
+    """Invoke Homer makeTagDirectory on BAM files for all conditions."""
+    name = "Homer (tags)"
+
+    def Execute(self):
+        ACT = self.actor
+        LOG = ACT.log
+        SC = ACT.sc
+
+        nhomer = 0
+        for c in SC.conditions:
+            cname = c['name']
+            c['tags'] = cname + ".tags.d/"
+            c['itags'] = cname + ".itags.d/"
+            bams = SC.conditionBAMs(cname)
+            LOG.log("BAMs for condition {}: {}", cname, bams)
+            if not self.dry:
+                ACT.submit("homer.qsub makeTagDirectory {} {}".format(c['tags'], " ".join(bams)), done="homer.@.done")
+                nhomer += 1
+            ibams = SC.conditionBAMs(cname, role='input')
+            LOG.log("BAMs for condition {} (input): {}", cname, ibams)
+            if not self.dry:
+                ACT.submit("homer.qsub makeTagDirectory {} {}".format(c['itags'], " ".join(ibams)), done="homer.@.done")
+                nhomer += 1
+        return ACT.wait(("homer.@.done", nhomer))
+
+class HomerPeaks(Line):
+    """Invoke Homer findPeaks on a tag directory."""
+    name = "Homer (peaks)"
+    
+    def Execute(self):
+        ACT = self.actor
+        LOG = ACT.log
+        SC = ACT.sc
+
+        self.cnames = []
+        self.peaks = []
+        self.histones = []
+        self.supers = []
+
+        nhomer = 0
+        for c in SC.conditions:
+            self.cnames.append(c['name'])
+            self.peaks.append(c['tags'] + "/peaks.txt")
+            self.histones.append(c['tags'] + "/regions.txt")
+            self.supers.append(c['tags'] + "/superEnhancers.txt")
+
+            LOG.log("Finding peaks in {} (input: {})".format(c['tags'], c['itags']))
+            if not self.dry:
+                for mode in ["factor", "histone", "super"]:
+                    ACT.submit("homer.qsub findPeaks {} {} {}".format(mode, c['tags'], c['itags']), done="homerp.@.done")
+                    nhomer += 1
+        ACT.wait(("homerp.@.done", nhomer))
+        nhomer = 0
+        for c in SC.conditions:
+            if not self.dry:
+                ACT.submit("homer.qsub annotate {} {}".format(c['tags'], "hg38"), done="homera.@.done")
+                nhomer += 1
+        return ACT.wait(("homera.@.done", nhomer))
+
+    def PostExecute(self):
+        ACT = self.actor
+        LOG = ACT.log
+        SC = ACT.sc
+        
+        n = len(self.cnames)
+        if ACT.missingOrStale("peaks.xlsx", other=self.peaks):
+            args = ["{} -name {}".format(self.peaks[i], self.cnames[i]) for i in range(n) ]
+            ACT.shell("module load dibig_tools; csvtoxls.py peaks.xlsx -q {}".format(" ".join(args)))
+        if ACT.missingOrStale("regions.xlsx", other=self.histones):
+            args = ["{} -name {}".format(self.histones[i], self.cnames[i]) for i in range(n) ]
+            ACT.shell("module load dibig_tools; csvtoxls.py regions.xlsx -q {}".format(" ".join(args)))
+        if ACT.missingOrStale("enhancers.xlsx", other=self.supers):
+            args = ["{} -name {}".format(self.supers[i], self.cnames[i]) for i in range(n) ]
+            ACT.shell("module load dibig_tools; csvtoxls.py enhancers.xlsx -q {}".format(" ".join(args)))
+        return True
+
+    def Report(self):
+        ACT = self.actor
+        LOG = ACT.log
+        SC = ACT.sc
+
+        ACT.scene("Peak finding")
+        ACT.reportf("""Peak finding was performed using <b>HOMER</b>. Three detection types were performed: <i>Peaks</i>, <i>Regions</i>, and <i>SuperEnhancers</i>. Please see
+the <A href="http://homer.ucsd.edu/homer/ngs/peaks.html">HOMER</A> documentation for details. The following table provides links to the bedGraph files for each detection type
+in each condition, and to an Excel file containing the results of each detection type (one sheet per condition).""")
+        tbl = Table.ScrollingTable(id='tblhomer', align='RL', caption="Results of peak detection with HOMER.")
+        tbl.startHead()
+        tbl.addHeaderRow(["Condition", "Count", "bedGraph"])
+        tbl.startBody()
+
+        tbl.addSectionRow("Peaks")
+        npeaks = 0
+        for c in SC.conditions:
+            path = c['tags'] + "peaks.bedGraph"
+            nl = int(ACT.fileLines(path)) - 1
+            npeaks += nl
+            tbl.addRowHeader(c['name'])
+            tbl.addRow([ nl, Utils.linkify(path)])
+        tbl.addRowHeader("Combined")
+        tbl.addRow( [ npeaks, Utils.linkify("peaks.xlsx") ] )
+
+        tbl.addSectionRow("Regions")
+        npeaks = 0
+        for c in SC.conditions:
+            path = c['tags'] + "regions.bedGraph"
+            nl = int(ACT.fileLines(path)) - 1
+            npeaks += nl
+            tbl.addRowHeader(c['name'])
+            tbl.addRow([ nl, Utils.linkify(path)])
+        tbl.addRowHeader("Combined")
+        tbl.addRow( [ npeaks, Utils.linkify("regions.xlsx") ] )
+
+        tbl.addSectionRow("Enhancers")
+        npeaks = 0
+        for c in SC.conditions:
+            path = c['tags'] + "superEnhancers.bedGraph"
+            nl = int(ACT.fileLines(path)) - 1
+            npeaks += nl
+            tbl.addRowHeader(c['name'])
+            tbl.addRow([ nl, Utils.linkify(path)])
+        tbl.addRowHeader("Combined")
+        tbl.addRow( [ npeaks, Utils.linkify("enhancers.xlsx") ] )
+
+        tbl.toHTML(ACT.out)
+        return True
+
+class HomerDiffPeaks(Line):
+    """Determine differential peaks."""
+    name = "Homer (diff)"
+
+    def Execute(self):
+        ACT = self.actor
+        LOG = ACT.log
+        SC = ACT.sc
+
+        nhomer = 0
+        for contrast in SC.contrasts:
+            ctrl = contrast['control']
+            test = contrast['test']
+            ctrlcond = SC.findCondition(ctrl)
+            testcond = SC.findCondition(test)
+            name1 = "{}.vs.{}.diffPeaks".format(test, ctrl)
+            name2 = "{}.vs.{}.diffPeaks".format(ctrl, test)
+            contrast['diff1'] = name1 + ".csv"
+            contrast['diff2'] = name2 + ".csv"
+            contrast['diffbedg1'] = name1 + ".bedGraph"
+            contrast['diffbedg2'] = name2 + ".bedGraph"
+            if not self.dry:
+                ACT.submit("homer.qsub diffPeaks {} {} {}".format(testcond['tags'], ctrlcond['tags'], name1), done="homerd.@.done")
+                ACT.submit("homer.qsub diffPeaks {} {} {}".format(ctrlcond['tags'], testcond['tags'], name2), done="homerd.@.done")
+                nhomer += 2
+        return ACT.wait(("homerd.@.done", nhomer))
+
+    def PostExecute(self):
+        ACT = self.actor
+        LOG = ACT.log
+        SC = ACT.sc
+        
+        for contrast in SC.contrasts:
+            ctrl = contrast['control']
+            test = contrast['test']
+            contrast['diffx'] = "{}.vs.{}.diffPeaks.xlsx".format(test, ctrl)
+            if ACT.missingOrStale(contrast['diffx'], other=contrast['diff1']):
+                ACT.shell("module load dibig_tools; csvtoxls.py {} -q {} {}".format(contrast['diffx'], contrast['diff1'], contrast['diff2']))
+        return True
+
+    def Report(self):
+        ACT = self.actor
+        LOG = ACT.log
+        SC = ACT.sc
+
+        ACT.scene("Differential peak finding")
+        ACT.reportf("""Differential peak finding was performed using the HOMER <B>getDifferentialPeaks</B> command. The following files contain 
+the peaks showing significant differences in each contrast.""")
+        tbl = Table.ScrollingTable(id='tblhomerdiff', align='CCL', caption="Results of differential peak detection with HOMER.")
+        tbl.startHead()
+        tbl.addHeaderRow(["Test", "Control", "DiffPeaks"])
+        tbl.startBody()
+        for contr in SC.contrasts:
+            tbl.addRow([ contr['test'],
+                         contr['control'],
+                         Utils.linkify(contr['diffx']) ])
+        tbl.toHTML(ACT.out)
+        return True
+
+class HomerMotifs(Line):
+    """Perform motif identification on peaks."""
+    name = "Homer (motifs)"
+    genome = "hg38"
+
+    def Setup(self):
+        self.genome = Utils.dget('genome', self.properties, self.genome)
+        return True
+
+    def Execute(self):
+        ACT = self.actor
+        LOG = ACT.log
+        SC = ACT.sc
+
+        nhomer = 0
+        for c in SC.conditions:
+            outdir = c['name'] + ".motifs"
+            peaks  = c['tags'] + "/peaks.txt"
+            LOG.log("Finding motifs in {}, output to {}".format(peaks, outdir))
+            # Add motfis dir to Zip file
+            ACT.shell("echo '{}/{}/*' >> .files".format(ACT.Name, outdir))
+
+            if not self.dry:
+                ACT.submit("homer.qsub findMotifs {} {} {}".format(peaks, self.genome, outdir), done="homerm.@.done")
+                nhomer += 1
+        return ACT.wait(("homerm.@.done", nhomer))
+
+    def Report(self):
+        ACT = self.actor
+        SC = ACT.sc
+
+        ACT.scene("Motif finding")
+        ACT.reportf("""ChIP-Seq peaks were analyzed with the HOMER <b>findMotifs</b> function. The links in the following table lead to the motif finding report for each condition.""")
+        tbl = Table.ScrollingTable(id='tblhomermotifs', align='CLL', caption="Results of motif finding with HOMER.")
+        tbl.startHead()
+        tbl.addHeaderRow(["Condition", "Known", "<i>de novo</i>"])
+        tbl.startBody()
+        for c in SC.conditions:
+            outdir = c['name'] + ".motifs/"
+            tbl.addRow([ c['name'], Utils.linkify(outdir + "knownResults.html", target='homer'), Utils.linkify(outdir + "homerResults.html", target='homer')])
+        tbl.toHTML(ACT.out)
+        return True
+
+### Insert size analysis
+
+class InsertSize(Line):
+    """Compute the insert size distribution on the contents of a BAM file using Picard."""
+    name = "Insert Size"
+
+    def Execute(self):
+        ACT = self.actor
+        LOG = ACT.log
+        SC = ACT.sc
+
+        npicard = 0
+        for cond in SC.conditions:
+            cond['insertsizecsv'] = cond['name'] + ".insert-size-metrics.csv"
+            cond['insertsizepdf'] = cond['name'] + ".insert-size-metrics.pdf"
+            cmdline = "picard.qsub CollectInsertSizeMetrics I={} O={} H={} M=0.5".format(cond['bam'], cond['insertsizecsv'], cond['insertsizepdf'])
+            LOG.log("Executing: {}", cmdline)
+            if not self.dry:
+                ACT.submit(cmdline, done="isize.@.done")
+                npicard += 1
+        return ACT.wait(("isize.@.done", npicard))
+
+    def Report(self):
+        ACT = self.actor
+        LOG = ACT.log
+        SC = ACT.sc
+
+        ACT.scene("Insert size distribution")
+        ACT.reportf("""Insert size distribution was analyzed using the Picard <b>CollectInsertSizeMetrics</b> tool. The following PDF files contain the plot of insert size distribution in each condition.""")
+        for cond in SC.conditions:
+            ACT.file(cond['insertsizepdf'], description="Insert size distribution in {}".format(cond['name']))
         return True
 
 ### Methylation
@@ -1497,7 +1800,8 @@ class MMAP(Line):
         ACT = self.actor
         LOG = ACT.log
         SC = ACT.sc
-
+        
+        paired = SC.samples[0]['readsets'][0]['paired'] # Maybe this should be stored in SC?
         nalign = Utils.fileToDict(ACT.alignedCounts)
         readcounts = Utils.fileToDict(ACT.fastqCountsFilter)
 
@@ -1509,10 +1813,13 @@ class MMAP(Line):
         tbl.startBody()
         for smp in SC.samples:
             sn = smp['name']
+            al = Utils.dget(sn, nalign, default=0) # number of aligned reads
+            if paired:
+                al = al/2
             tbl.addRow([ "<b>" + sn + "</b>",
                          Utils.fmt(readcounts[sn]),
-                         Utils.fmt(Utils.dget(sn, nalign, default=0)),
-                         Utils.pct(Utils.dget(sn, nalign, default=0), Utils.dget(sn, readcounts, default=0)) ])
+                         Utils.fmt(al),
+                         Utils.pct(al, Utils.dget(sn, readcounts, default=0)) ])
         tbl.toHTML(ACT.out)
         return True
         
@@ -1543,10 +1850,16 @@ class CScall(Line):
             cbams = ",".join([ smp['bamC'] for smp in SC.conditionSamples(cond['name']) ])
             gbams = ",".join([ smp['bamG'] for smp in SC.conditionSamples(cond['name']) ])
             cond['callbed'] = cond['name'] + ".bed"
+            cond['callbedg'] = cond['name'] + ".bedGraph"
             cond['callreport'] = cond['name'] + "-report.csv"
             cond['lcreport'] = cond['name'] + "-lc.csv"
             cond['histreport'] = cond['name'] + "-hist.csv"
             cond['matreport'] = cond['name'] + "-mat.csv"
+            cond['winavg'] = cond['name'] + "-winavg.csv"
+            cond['winmat'] = cond['name'] + "-winmat.csv"
+            cond['winavgx'] = cond['name'] + "-winavg.xlsx"
+            cond['winmatx'] = cond['name'] + "-winmat.xlsx"
+
             if ACT.strand == None:
                 strand = ""
             else:
@@ -1562,10 +1875,26 @@ class CScall(Line):
         LOG = ACT.log
         SC = ACT.sc
 
+        allwinavg = []
         for cond in SC.conditions:
+            if ACT.missingOrStale(cond['callbedg'], cond['callbed']):
+                ACT.shell('echo "track type=bedGraph" > {}; cut -f 1,2,3,4 {} >> {}'.format(cond['callbedg'], cond['callbed'], cond['callbedg']))
+            allwinavg.append(cond['winavg'])
+            if ACT.missingOrStale(cond['winavg'], cond['callbed']):
+                ACT.shell("module load dibig_tools; dmaptools.py winavg -o {} {}", cond['winavg'], cond['callbed'])
+            if ACT.missingOrStale(cond['winavgx'], cond['winavg']):
+                ACT.shell("module load dibig_tools; csvtoxls.py {} -q {}", cond['winavgx'], cond['winavg'])
+            if ACT.missingOrStale(cond['winmat'], cond['matreport']):
+                ACT.shell("module load dibig_tools; dmaptools.py winmat -o {} {}", cond['winmat'], cond['matreport'])
+            if ACT.missingOrStale(cond['winmatx'], cond['winmat']):
+                ACT.shell("module load dibig_tools; csvtoxls.py {} -q {}", cond['winmatx'], cond['winmat'])
             cond['callreportx'] = cond['name'] + "-report.xlsx"
             ACT.shell("module load dibig_tools; csvtoxls.py {} {} -firstrowhdr -name Report {} -firstrowhdr -name Histogram {} -firstrowhdr -name LoneC",
                       cond['callreportx'], cond['callreport'], cond['histreport'], cond['lcreport'])
+
+        # Combine all winavg files together
+        if ACT.missingOrStale("Merged.winavg.csv", allwinavg):
+            ACT.shell("module load dibig_tools; dmaptools.py cmerge -o Merged.winavg.csv {}; csvtoxls.py Merged.winavg.xlsx -q Merged.winavg.csv".format(" ".join(allwinavg)))
 
         return True
 
@@ -1579,10 +1908,11 @@ class CScall(Line):
 A site was included in the analysis if it reached a coverage of <b>{}</b> in at least <b>{}</b> sample{}.""", 
                     os.path.splitext(os.path.basename(ACT.siteindex))[0],
                     ACT.mindepth, ACT.minsamples, "" if ACT.minsamples == 1 else "s")
-        ACT.reportf("""The following table provides a summary of the number of sites identified for each experimental condition. Follow the links to the reports for more detailed information.""")
+        ACT.reportf("""The following table provides a summary of the number of sites identified for each experimental condition. Follow the links to the reports for more detailed information.
+The bedGraph file contains the % methylation level at each detected site, and is suitable for IGV or the UCSC Genome Browser.""")
         tbx = Table.ScrollingTable(id='tblcscall', align="LRRRRCCCC", caption="Summary of methylation calling.")
         tbx.startHead()
-        tbx.addHeaderRow(["Condition", "Sites", "Total basepairs", "Total site coverage", "Avg site coverage", "Full report", "Raw data", "Plots"])
+        tbx.addHeaderRow(["Condition", "Sites", "Total basepairs", "Total site coverage", "Avg site coverage", "Full report", "bedGraph"])
         tbx.startBody()
         for cond in SC.conditions:
             data = getCscallReport(cond)
@@ -1593,11 +1923,26 @@ A site was included in the analysis if it reached a coverage of <b>{}</b> in at 
                              Utils.fmt(int(data[2])),
                              data[3],
                              Utils.linkify(cond['callreportx']),
+                             Utils.linkify(cond['callbedg']) ])
+        tbx.toHTML(ACT.out)
+
+        ACT.reportf("""The following table provides links to additional reports on methylation calling. The WinAvg files contain the average
+methylation in each window (averaged over all sites contained in the window and all replicates). The Raw Data files contain the % methylation
+level at each detected site in each replicate, preceded by their average and standard deviation.""")
+        tbx = Table.ScrollingTable(id='tblcscall2', align="LRRRRCCCC", caption="Additional methylation reports.")
+        tbx.startHead()
+        tbx.addHeaderRow(["Condition", "WinAvg (CSV)", "WinAvg (Excel)", "Raw data (CSV)", "Plots"])
+        tbx.startBody()
+        for cond in SC.conditions:
+            if data:
+                tbx.addRow([ "<b>" + cond['name'] + "</b>",
+                             Utils.linkify(cond['winavg']),
+                             Utils.linkify(cond['winavgx']),
                              Utils.linkify(cond['matreport']),
                              Utils.linkify(cond['methplots']) ])
         tbx.toHTML(ACT.out)
 
-        # ACT.reportf("""The <i>Sites</i> column contains the number of sites for the desired methylation type found in the alignment. """)
+        ACT.file("Merged.winavg.xlsx", description="Combined winavg file.")
         return True
         
 ### MCOMP
@@ -1607,24 +1952,29 @@ class MCOMP(Line):
 
     def Execute(self):
         ACT = self.actor
+        SC  = ACT.sc
         LOG = ACT.log
 
-        ncomp = 0
-        subs = writeMCOMPqsub(ACT)
-        if not self.dry:
-            for sub in subs:
-                ncomp += 1
-                ACT.submit(sub, done="mcomp.@.done")
-        ACT.wait(("mcomp.@.done", ncomp))
-        LOG.log("Computing differential methylation summary.")
-        self.prefix = Utils.id_generator(10)
-        ACT.diffmeth = diffmethSummary(ACT, self.prefix, self.dry)
+        if len(SC.contrasts) > 0:
+            ncomp = 0
+            subs = writeMCOMPqsub(ACT)
+            if not self.dry:
+                for sub in subs:
+                    ncomp += 1
+                    ACT.submit(sub, done="mcomp.@.done")
+            ACT.wait(("mcomp.@.done", ncomp))
+            LOG.log("Computing differential methylation summary.")
+            self.prefix = Utils.id_generator(10, prefix='tmp-')
+            ACT.diffmeth = diffmethSummary(ACT, self.prefix, self.dry)
         return True
 
     def Report(self):
         ACT = self.actor
         SC  = ACT.sc
         LOG = ACT.log
+
+        if len(SC.contrasts) == 0:
+            return True
 
         ACT.scene("Differential methylation analysis")
         ACT.reportf("""Differential methylation was determined using the <b>mcomp</b> program. Sites for which the P-value of the difference between test and control methylation rates was below <b>{}</b> were considered significant. Sites with a methylation difference above <b>{}</b> were classified as <i>Strongly hyper/hypo methylated</i> (++ or --), otherwise they were classified as <i>hyper/hypo methylated</i> (+ or -). The following table reports the number of differentially methylated sites identified in each contrast, and provides links to full reports.""".format(ACT.pval, ACT.diff))
@@ -1706,7 +2056,8 @@ class DMR(Line):
     name = "Differentially methylated regions"
 
     def makeCmdline(self, ACT, infile1, infile2, outfile):
-        return "generic.qsub dmaptools.py dmr -o {} -g 1 {} {} module:dibig_tools".format(outfile, infile1, infile2)
+        return "generic.qsub dmaptools.py dmr -o {} -w {} -s {} -c {} -d {} -p {} -g {} {} {} module:dibig_tools".format(
+            outfile, ACT.dmr_winsize, ACT.dmr_minsites, ACT.dmr_mincov, ACT.dmr_diff, ACT.dmr_pval, ACT.dmr_gap, infile1, infile2)
 
     def Execute(self):
         ACT = self.actor
@@ -1734,8 +2085,13 @@ class DMR(Line):
         ACT = self.actor
         SC  = ACT.sc
 
+        alldmrs = []
         for contr in SC.contrasts:
+            alldmrs.append(contr['dmrfile'])
             ACT.shell("module load dibig_tools; csvtoxls.py -q {} {}".format(contr['dmrxls'], contr['dmrfile']))
+
+        if ACT.missingOrStale("Merged.dmr.csv", alldmrs):
+            ACT.shell("module load dibig_tools; dmaptools.py cmerge -o Merged.dmr.csv {}; csvtoxls.py Merged.dmr.xlsx -q Merged.dmr.csv".format(" ".join(alldmrs)))
         return True
 
     def Report(self):
@@ -1747,14 +2103,17 @@ class DMR(Line):
 using the method described in {}.""".format(Utils.linkify("http://www.sciencedirect.com/science/article/pii/S0092867412014304", "Stroud et al., Cell 2013")))
         tbl = Table.ScrollingTable(id='tbldmr', align="CCRC", caption="Tables of differentially methylated regions (DMRs).")
         tbl.startHead()
-        tbl.addHeaderRow(["Test", "Control", "DMRs", "DMR file"])
+        tbl.addHeaderRow(["Test", "Control", "DMRs", "DMR file (CSV)", "DMR file (Excel)"])
         tbl.startBody()
         for contr in SC.contrasts:
             tbl.addRow(["<b>" + contr['test'] + "</b>",
                         "<b>" + contr['control'] + "</b>",
                         int(ACT.fileLines(contr['dmrfile'])) - 1,
+                        Utils.linkify(contr['dmrfile']),
                         Utils.linkify(contr['dmrxls'])])
         tbl.toHTML(ACT.out)
+
+        ACT.file("Merged.dmr.xlsx", "Merged DMR file.")
         return True
 
 ### GeneMeth
@@ -1821,9 +2180,12 @@ class GeneMeth(Line):
                 rl = "{:02d}".format(l+1)
                 dm['genesigfilex'+rl] = "{}.vs.{}.genes{}.sig.xlsx".format(dm['test'], dm['control'], rl)
                 dm['genefullfilex'+rl] = "{}.vs.{}.genes{}.full.xlsx".format(dm['test'], dm['control'], rl)
-                ACT.shell("module load dibig_tools; csvtoxls.py {} -q {}; csvtoxls.py {} -q {}",
-                          dm['genesigfilex'+rl], dm['genesigfile'+rl], 
-                          dm['genefullfilex'+rl], dm['genefullfile'+rl])
+                if ACT.missingOrStale(dm['genesigfilex'+rl], dm['genesigfile'+rl]):
+                    ACT.shell("module load dibig_tools; csvtoxls.py {} -q {};",
+                              dm['genesigfilex'+rl], dm['genesigfile'+rl])
+                if ACT.missingOrStale(dm['genefullfilex'+rl], dm['genefullfile'+rl]):
+                    ACT.shell("module load dibig_tools; csvtoxls.py {} -q {};",
+                              dm['genefullfilex'+rl], dm['genefullfile'+rl])
         return True
         
     def countSigGenes(self, filename, diff):
@@ -1906,6 +2268,119 @@ class MethPlots(Line):
         drawDMCplots(ACT, self.dry)
         return True
 
+### UCSC hubs
+
+class UCSCHub(Line):
+    name = "Hub"
+    kind = "rnaseq"
+    hubname = ""
+    dirname = "hub"
+
+    def Setup(self):
+        ACT = self.actor
+        self.kind = Utils.dget('kind', self.properties, self.kind)
+        self.hubname = ACT.getConf("hubname", "Hub") or ACT.title
+        self.dirname = ACT.getConf("dirname", "Hub") or ACT.dirname
+
+    def Execute(self):
+        ACT = self.actor
+        LOG = ACT.log
+        SC = ACT.sc
+        u = Utils.UCSCHub(self.hubname, ACT.getConf("shortLabel", "Hub"), ACT.getConf("longLabel", "Hub"), 
+                          genome=ACT.getConf("genome", "Hub"), 
+                          sizes=ACT.getConf("sizes", "Hub"), 
+                          dirname=self.dirname, 
+                          email=ACT.getConf("email", "Hub"))
+        u.generate()
+        if self.kind == 'rnaseq':
+            u.startContainer("samples", "WIG tracks for samples", "WIGsamples", "bigWig")
+            for smp in SC.samples:
+                u.addWig(smp['wigfile'], smp['name'], smp['name'], "{} rnaseq", alwaysZero="on", smoothingWindow="4", visibility="dense")
+            u.endContainer()
+            u.startContainer("conditions", "WIG tracks for conditions", "WIGconditions", "bigWig")
+            for cond in SC.conditions:
+                u.addWig(cond['wigfile'], cond['name'], cond['name'], "{} rnaseq", alwaysZero="on", smoothingWindow="4", visibility="dense")
+            u.endContainer()
+
+        elif self.kind == 'chipseq':
+            u.startContainer("samples", "WIG (by sample)", "WIGsamples", "bigWig")
+            for smp in SC.samples:
+                u.addWig(smp['wigfile'], smp['name'], smp['name'], "{} chipseq", alwaysZero="on", smoothingWindow="4", visibility="dense")
+            u.endContainer()
+            u.startContainer("conditions", "WIG (by condition)", "WIGconditions", "bigWig")
+            for cond in SC.conditions:
+                u.addWig(cond['wigfile'], cond['name'], cond['name'], "{} chipseq", alwaysZero="on", smoothingWindow="4", visibility="dense")
+            u.endContainer()
+            u.startContainer("pkbdg", "peaks", "BDGpeaks", "bigWig")
+            for cond in SC.conditions:
+                u.addBedGraph(cond['tags'] + "peaks.bedGraph", cond['name'] + "-peaks", cond['name'] + "-peaks", "{} - chipseq")
+            u.endContainer()
+            u.startContainer("rgbdg", "regions", "BDGregions", "bigWig")
+            for cond in SC.conditions:
+                u.addBedGraph(cond['tags'] + "regions.bedGraph", cond['name'] + "-regions", cond['name'] + "-regions", "{} - chipseq")
+            u.endContainer()
+            u.startContainer("sebdg", "enhancers", "BDGenhancers", "bigWig")
+            for cond in SC.conditions:
+                u.addBedGraph(cond['tags'] + "superEnhancers.bedGraph", cond['name'] + "-enhancers", cond['name'] + "-enhancers", "{} - chipseq")
+            u.endContainer()
+            u.startContainer("diffbdg", "differential peaks", "BDGdiffpeaks", "bigWig")
+            for contr in SC.contrasts:
+                u.addBedGraph(contr['diffbedg1'], contr['name'] + "-diffPeaks1", contr['name'] + "-diffPeaks1", "{} - chipseq")
+                u.addBedGraph(contr['diffbedg2'], contr['name'] + "-diffPeaks2", contr['name'] + "-diffPeaks2", "{} - chipseq")
+            u.endContainer
+
+        elif self.kind == 'atacseq':
+            u.startContainer("samples", "WIG tracks for samples", "WIGsamples", "bigWig")
+            for smp in SC.samples:
+                u.addWig(smp['wigfile'], smp['name'], smp['name'], "{} atacseq", alwaysZero="on", smoothingWindow="4", visibility="dense")
+            u.endContainer()
+            u.startContainer("conditions", "WIG tracks for conditions", "WIGconditions", "bigWig")
+            for cond in SC.conditions:
+                u.addWig(cond['wigfile'], cond['name'], cond['name'], "{} atacseq", alwaysZero="on", smoothingWindow="4", visibility="dense")
+            u.endContainer()
+            u.startContainer("macspu", "bedGraph tracks for MACS pileup", "BDGpeaks", "bigWig")
+            for contr in SC.contrasts:
+                u.addBedGraph(contr['macsPileup'], contr['name'] + "-pileup", contr['name'] + "-pileup", "{} - atacseq")
+            u.endContainer()
+            u.startContainer("macspk", "bedGraph tracks for MACS peaks", "BDGpeaks", "bigWig")
+            for contr in SC.contrasts:
+                u.addBedGraph(contr['macsNarrow'], contr['name'] + "-peaks", contr['name'] + "-peaks", "{} - atacseq")
+            u.endContainer()
+            u.startContainer("macssm", "bedGraph tracks for summits", "BDGsummits", "bigWig")
+            for contr in SC.contrasts:
+                u.addBedGraph(contr['macsSummits'], contr['name'] + "-summits", contr['name'] + "-summits", "{} - atacseq")
+            u.endContainer()
+
+        elif self.kind == 'nucleoatac':
+            natacdir = "natac/"
+            wigs = ["ins" "nucleoatac_signal" "nucleoatac_signal.smooth" "occ"]
+            u.startContainer("samples", "WIG tracks for ATAC datasets", "WIGsamples", "bigWig")
+            for smp in SC.samples:
+                for w in wigs:
+                    bwname = natacdir + "/" + smp["name"] + "." + w + ".bw"
+                    u.addBigWig(bwname, smp["name"] + "-" + w, smp["name"] + "-" + w, "{} - NucleoATAC")
+            u.endContainer()
+
+        # Add hub to Zip file
+        ACT.addToZipFile("{}/{}/*".format(ACT.Name, self.dirname))
+        # Store hub.txt location
+        self.hubpath = self.dirname + "/hub.txt"
+        return True
+
+    def Report(self):
+        ACT = self.actor
+        ACT.scene("UCSC hub")
+        
+        url = ACT.getConf("url", "Hub")
+        if url:
+            linkUrl = "http://genome.ucsc.edu/cgi-bin/hgTracks?db={}&hubUrl={}/{}/{}".format(ACT.getConf("genome", "Hub"), url, ACT.Name, self.hubpath)
+            ACT.reportf("""Use the following link to display the results in the {}.""", ACT.linkify(linkUrl, "UCSC Genome Browser", target="ucsc"))
+        else:
+            ACT.reportf("""Use the following link to display the results in the {}. Copy the link location and paste it into the <b>My Hubs</b> form in {}.""",
+                        ACT.linkify(self.hubpath, "UCSC Genome Browser", target="ucsc"), 
+                        ACT.linkify("http://genome.ucsc.edu/cgi-bin/hgHubConnect", "this page"))
+        return True
+
 ### For Son's SRA pipeline
 
 class FastqDump(Line):
@@ -1950,12 +2425,18 @@ REGISTRY = {'test':       testLine,
             'rsemdiff':   RSEMdiff,
             'bamtowig':   BAMtoWig,
             'macs':       MACScallpeak,
+            'tags':       HomerTags,
+            'peaks':      HomerPeaks,
+            'motifs':     HomerMotifs,
+            'diffpeaks':  HomerDiffPeaks,
+            'insertsize': InsertSize,
             'csfilter':   CSfilter,
             'mmap':       MMAP,
             'cscall':     CScall,
             'mcomp':      MCOMP,
             'dmr':        DMR,
             'genemeth':   GeneMeth,
-            'methplots':  MethPlots
+            'methplots':  MethPlots,
+            'hub':        UCSCHub,
 }
 

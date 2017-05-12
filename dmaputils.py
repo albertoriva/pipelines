@@ -248,7 +248,7 @@ def drawBEDplots(ACT, cond, dry):
     ACT.mkdir("plots")
     name = cond['name']
     htmlfile = "{}-metyhlation.html".format(name)
-    pngfilelist = "pngfiles-" + name
+    pngfilelist = name + ".pngs.tmp"
     cond['methplots'] = htmlfile
     bedfile = cond['callbed']
     outpatt = "plots/methprofile-" + name + "-{}.png"
@@ -306,15 +306,16 @@ def drawDMCplots(ACT, dry):
         test = d['test']
         sig = d['sigfile']
         png = "plots/" + test + ".vs." + ctrl + "-{}.dmc.png" # png filename with placeholder for chrom        
+        pngdir = test + ".vs." + ctrl + ".pngs.tmp" # List of actual png filenames for this contrast
         htmlfile = "{}.vs.{}.dmc.html".format(test, ctrl)
         d['dmcplot'] = png
         d['dmcfile'] = htmlfile
         title = "Differential methylation - {}"
         if not dry:
-            ACT.shell('module load dibig_tools; plotter -o {} -f $HPC_DIBIGTOOLS_DIR/lib/fonts/liberation/ dmc -i {} -xlabel "Chromosome position" -ylabel "% methylation" -title "{}" > pngfiles2',
-                      png, sig, title)
+            ACT.shell('module load dibig_tools; plotter -o {} -f $HPC_DIBIGTOOLS_DIR/lib/fonts/liberation/ dmc -i {} -xlabel "Chromosome position" -ylabel "% methylation" -title "{}" > {}',
+                      png, sig, title, pngdir)
 
-        with open("pngfiles2", "r") as f:
+        with open(pngdir, "r") as f:
             plotfiles = f.readlines()
         plotfiles = [ s.strip("\n").split("\t") for s in plotfiles ]
 

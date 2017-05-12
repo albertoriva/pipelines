@@ -38,6 +38,14 @@ Its methods all do nothing and return True."""
             except:
                 pass
 
+    def checkFiles(self, *filenames):
+        LOG = self.actor.log
+        for f in filenames:
+            if not os.path.isfile(f):
+                if LOG:
+                    LOG.log("Step `{}' requires file `{}' that does not exist. Terminating.", self.name, f)
+                exit(1)
+
     def Setup(self):
         """The Setup() method is called by init."""
         return True

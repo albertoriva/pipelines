@@ -1,7 +1,65 @@
 # (c) 2015, A. Riva, DiBiG, ICBR Bioinformatics
 # University of Florida
 
-### For BA3P
+import os
+
+import Utils
+from SampleCollection import SampleCollection
+from Lines import Line
+import Table
+
+### BA3P
+
+### Samples manager
+
+class Samples(Line):
+    """This object handles initializing the SampleCollection, checking that all files exist, fixing paths."""
+    name = "SamplesManager"
+
+    def Setup(self):
+        ACT = self.actor
+        ACT.sc = SampleCollection(ACT.Conf)
+        SC = ACT.sc
+
+        ## Fix paths to fastq files in each readset and store base name.
+        #for rs in SC.readsets:
+        #    rs['left'] = ACT.checkPath(rs['left'])
+        #    rs['lbase'] = ACT.setFileExt(os.path.split(rs['left'])[1], "", remove=[".fastq", ".gz"]) # basename of left-side reads
+        #    if rs['paired']:
+        #        rs['right'] = ACT.checkPath(rs['right'])
+        #        rs['rbase'] = ACT.setFileExt(os.path.split(rs['right'])[1], "", remove=[".fastq", ".gz"]) # basename of right-side reads
+
+        ## Get fasta names from conf file for samples
+        for smp in SC.samples:
+            smp['fasta'] = "../" + ACT.getConf("fasta", section=smp['name'])
+
+        return True
+
+    def Verify(self):
+        return self.actor.sc.verify()
+
+    def Report(self):
+        ACT = self.actor
+        SC = ACT.sc
+
+        ACT.scene("Input data")
+        ACT.reportf("The following table summarizes the samples, conditions, and contrasts in this analysis. A readset is either a single fastq file or a pair of fastq files (for paired-end sequencing).")
+        tbl1 = Table.ScrollingTable(id='tbl1', caption='Summary of input data')
+        tbl1.startHead()
+        tbl1.addHeaderRow(["Category", "Data"])
+        tbl1.startBody()
+        tbl1.addSectionRow("Summary of input data")
+        tbl1.addRowHeader("Contrasts:")
+        tbl1.addRow([ ", ".join([ contr['test'] + " vs. " + contr['control'] for contr in SC.contrasts])])
+        tbl1.addRowHeader("Conditions:")
+        tbl1.addRow([ ", ".join([ cond['name'] for cond in SC.conditions])])
+        for cond in SC.conditions:
+            condsamples = SC.conditionSamples(cond)
+            tbl1.addRowHeader(cond['name'], rowspan=len(condsamples))
+            for smp in condsamples:
+                tbl1.addRow([ "{} ({} readsets)".format(smp['name'], len(smp['readsets'])) ])
+        tbl1.toHTML(ACT.out)
+        return True
 
 class ContigRenamer(Line):
     """Rename sequences in contig files as XXX_n, where XXX is the sample name and n is a progressive number."""
@@ -10,6 +68,9 @@ class ContigRenamer(Line):
     def Execute(self):
         ACT = self.actor
         SC = ACT.sc
+
+        ACT.log.log("Creating directory Contigs/")
+        ACT.mkdir("Contigs")
 
         ACT.shell("touch dummymap")
         for smp in SC.samples:
@@ -190,7 +251,8 @@ class SNPsites(Line):
         ACT.shell("module load snp-sites; snp-sites -m -o {} {}".format(self.outfile, self.infile))
         return True
 
-REGISTRY = {'rencontig':  ContigRenamer,
+REGISTRY = {'samples':    Samples,
+            'rencontig':  ContigRenamer,
             'refindex':   IndexReference,
             'prokka':     Prokka,
             'mauve':      Mauve,

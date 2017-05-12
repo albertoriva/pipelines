@@ -94,6 +94,7 @@ class SampleCollection():
         if condnames != None:
             condnames = splitCommas(condnames)
             for c in condnames:
+                # print "condition: " + c
                 condsamples = self.getConf("samples", section=c)
                 if condsamples == None:
                     break
@@ -101,6 +102,7 @@ class SampleCollection():
                 condition = {'name': c,
                              'samples': condsamples}
                 for s in condsamples:
+                    # print "  sample: " + s
                     if not self.findSample(s):
                         self.addSample(s, role='default')
                 condinputs = self.getConf("inputs", section=c)
@@ -108,6 +110,7 @@ class SampleCollection():
                     condinputs = splitCommas(condinputs)
                     condition['inputs'] = condinputs
                     for s in condinputs:
+                        # print "  input: " + s
                         if not self.findSample(s):
                             self.addSample(s, role='input')
                     condition['samples'] = condsamples + condinputs
@@ -140,11 +143,11 @@ samples with a different role, or all if `role' is None."""
                     samples.append(smp)
             return samples
 
-    def conditionBAMs(self, name, role='default'):
+    def conditionBAMs(self, name, role='default', key='bam'):
         """Returns the list of BAM files for all the samples in this condition. By default, 
 only BAM files for samples with 'default' role are returned. The `role' argument can be used 
 to return samples with a different role, or all if `role' is None."""
-        return [ s['bam'] for s in self.conditionSamples(name, role=role) ]
+        return [ s[key] for s in self.conditionSamples(name, role=role) ]
 
 ### Samples
 
@@ -161,7 +164,8 @@ to return samples with a different role, or all if `role' is None."""
         sample = {'name': name, 'role': role, 'readsets': self.parseReadsets(name)}
         self.samples.append(sample)
         self.nsamples += 1
-        
+        return sample
+
     def parseReadsets(self, samplename):
         rs = []
 
@@ -259,7 +263,10 @@ to return samples with a different role, or all if `role' is None."""
         if p == -1:
             print "Configuration error: contrast `{}' should have the form testsample^controlsample.".format(c)
             sys.exit()
-        return {'test': c[:p], 'control': c[p+1:], 'label': c}
+        test = c[:p]
+        ctrl = c[p+1:]
+        name = "{}.vs.{}".format(test, ctrl)
+        return {'test': test, 'control': ctrl, 'name': name, 'label': c}
 
     def parseContrasts(self):
         base = self.getConf("contrasts")
