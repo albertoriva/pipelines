@@ -42,6 +42,7 @@ ACT.nrounds = ensureInt(ACT.getConf("nrounds", section="Bootstrap"))
 ACT.dpi = ensureFloat(ACT.getConf("dpi", section="Aracne", default="0.1"))
 ACT.pvalue = ensureFloat(ACT.getConf("pvalue", section="Aracne", default="1e-7"))
 ACT.qsuboptions = ACT.getConf("qsuboptions")
+ACT.tophubs = ACT.getConf("tophubs", default=50)
 
 ## Options for CX file generation
 ACT.attributes = ACT.getConfAll("CX")

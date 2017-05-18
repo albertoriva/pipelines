@@ -2,6 +2,7 @@ import os
 import glob
 import os.path
 import subprocess
+from datetime import date
 
 ### Functions implementing script steps
 
@@ -537,11 +538,34 @@ class GRFilterFinal(GRFilter):
         connections = ACT.real.name + ".conn.csv"
         ACT.shell("module load dibig_tools; apple.py convert co {} {}".format(cyto, connections))
         cxfile = ACT.real.name + ".cx"
-        ACT.shell("module load dibig_tools; apple.py convert ax {} {}".format(final, cxfile))
-        tophubs = ACT.shell("cut -f 1,2 {} | head -50".format(connections))
-        LOG.log("Top 50 hubs by number of connections:\n" + tophubs)
+
+        afile = CXattributes(ACT)
+        ACT.shell("module load dibig_tools; apple.py convert ax {} {} {}".format(afile, final, cxfile))
+        ACT.shell("cut -f 1,2 {} | head -{} > tophubs.txt".format(connections, ACT.tophubs))
+        with open("tophubs.txt", "r") as f:
+            tophubs = f.read()
+
+        LOG.log("Top {} hubs by number of connections:\n".format(ACT.tophubs) + tophubs)
+
+        LOG.log("Writing tophubnet.cy")
+        ACT.shell("module load dibig_tools; apple.py extract -a -o tophubnet.cy {} tophubs.txt".format(final))
+        cxfile = ACT.real.name + "-tophubs.cx"
+        LOG.log("Converting tophubnet.cy to CX format file {}", cxfile)
+
+        ACT.shell("module load dibig_tools; apple.py convert cx {} tophubnet.cy {}".format(afile, cxfile))
 
         return True
+
+def CXattributes(ACT):
+    if len(ACT.attributes) > 0:
+        with open("attributes.txt", "w") as out:
+            for a in ACT.attributes:
+                out.write("{}: {}\n".format(a[0].capitalize(), a[1]))
+            out.write("version: {}\n".format(date.today().isoformat()))
+            out.write("networkType: Genetic interactions\n")
+        return "-a attributes.txt"
+    else:
+        return ""
 
 ### Write adj stats report
 

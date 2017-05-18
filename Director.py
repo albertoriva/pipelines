@@ -16,6 +16,7 @@ class Director():
         self.actor = actor
         self.steplist = []
         self.steps = []
+
         lib = importlib.import_module(library)
         self.registry = lib.REGISTRY
 

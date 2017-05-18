@@ -5,8 +5,9 @@ import math
 import Utils
 
 def writeMatrixScript(scriptfile, samples, outfile, mode='g', erccdb=False, column=None):
-    """Write a qsub script to call 'rnaseqtools.py matrix' on the specified samples. Gene level if mode is 'g',
-isoform level if mode is 'i'. Extracts column `expected_count' by default unless a different column is specified.
+    """Write a qsub script to call 'rnaseqtools.py matrix' on the specified samples. Reads RSEM *.genes.results files
+if mode is 'g', RSEM *.isoforms.results files if mode is 'i', and kallisto abundance.tsv files if mode is 'k'. 
+Extracts column `expected_count' (or 'tpm' for kallisto) by default unless a different column is specified.
 If `erccdb' is specified it should be a pathname to and ERCC databases. In this case, ERCC normalization is
 performed."""
     with open(scriptfile, "w") as out:
@@ -20,6 +21,10 @@ module load dibig_tools
 rnaseqtools.py matrix """)
         if column:
             out.write(" -c " + column)
+        elif mode in ['g', 'i']:
+            out.write(" -c expected_count")
+        elif mode == 'k':
+            out.write(" -c tpm")
         if erccdb:
             out.write(" -e -ercc " + erccdb + " -mix " + ",".join([s['mix'] for s in samples]))
         for s in samples:
@@ -27,6 +32,8 @@ rnaseqtools.py matrix """)
                 out.write(" {}.genes.results".format(s['name']))
             elif mode == 'i':
                 out.write(" {}.isoforms.results".format(s['name']))
+            elif mode == 'k':
+                out.write(" {}.kallisto.d/abundance.tsv".format(s['name']))
         out.write(" > {}\n\n".format(outfile))
     return scriptfile
 

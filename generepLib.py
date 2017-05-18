@@ -268,170 +268,173 @@ class GenerepHistograms(Line):
         filter4.run(dry=self.dry)
         return True
 
-    def ExecuteOld(self):
-        ACT = self.actor
-        LOG = ACT.log
+#     def ExecuteOld(self):
+#         ACT = self.actor
+#         LOG = ACT.log
 
-        ## Use compare-mi-histograms on NNN.counts.csv to find optimal support
+#         ## Use compare-mi-histograms on NNN.counts.csv to find optimal support
 
-        LOG.log("Comparing real and randomized datasets to determine optimal support")
+#         LOG.log("Comparing real and randomized datasets to determine optimal support")
 
-        sum = 0
-        sumfpr = 0
-        n = 0
-        realcounts = ACT.real['dirname'] + "/" + ACT.real['name'] + ".counts.csv"
-        for d in ACT.datasets:
-            if not d['real']:
-                outfile = "{}.vs.{}.support.csv".format(ACT.real['name'], d['name'])
-                shcounts = d['dirname'] + "/" + d['name'] + ".counts.csv"
-                supp = genereputils.compare_mi_histograms(outfile, realcounts, shcounts, maxv=ACT.nrounds+1)
-                LOG.log("Comparing {} and {} into {}: maxDiff={} for support={}, FPR={}", realcounts, shcounts, outfile, supp[0], supp[1], supp[2])
-                sum += supp[1]
-                sumfpr += supp[2]
-                n += 1
+#         sum = 0
+#         sumfpr = 0
+#         n = 0
+#         realcounts = ACT.real['dirname'] + "/" + ACT.real['name'] + ".counts.csv"
+#         for d in ACT.datasets:
+#             if not d['real']:
+#                 outfile = "{}.vs.{}.support.csv".format(ACT.real['name'], d['name'])
+#                 shcounts = d['dirname'] + "/" + d['name'] + ".counts.csv"
+#                 supp = genereputils.compare_mi_histograms(outfile, realcounts, shcounts, maxv=ACT.nrounds+1)
+#                 LOG.log("Comparing {} and {} into {}: maxDiff={} for support={}, FPR={}", realcounts, shcounts, outfile, supp[0], supp[1], supp[2])
+#                 sum += supp[1]
+#                 sumfpr += supp[2]
+#                 n += 1
 
-        LOG.log("sumfpr = {}", sumfpr)
+#         LOG.log("sumfpr = {}", sumfpr)
 
-        optsupport = int(round(1.0 * sum/n))
-        fprsupport = int(round(1.0 * sumfpr/n))
+#         optsupport = int(round(1.0 * sum/n))
+#         fprsupport = int(round(1.0 * sumfpr/n))
 
-        LOG.log("Re-running consensus generation with optimal support {} (fpr={})", optsupport, fprsupport)
+#         LOG.log("Re-running consensus generation with optimal support {} (fpr={})", optsupport, fprsupport)
 
-        ## rerun consensus generation with support found in previous step
+#         ## rerun consensus generation with support found in previous step
 
-        ncons = 0
-        for d in ACT.datasets:
-            (script, adj) = genereputils.write_consensus_script(d['dirname'], d['name'], support=optsupport)
-            LOG.log("Generating consensus with support={} for {}", optsupport, d['name'])
-            d['adj'] = adj
-            LOG.log("Current .adj file: {}.adj", adj)
-            if not self.dry:
-                os.chdir(d['dirname'])
-                # os.rename(d['name'] + ".adj", d['name'] + ".orig.adj")
-                ACT.submit(script, done="../consensus.@.done")
-                os.chdir("..")
-                ncons += 1
-        ACT.wait(("consensus.@.done", ncons))
+#         ncons = 0
+#         for d in ACT.datasets:
+#             (script, adj) = genereputils.write_consensus_script(d['dirname'], d['name'], support=optsupport)
+#             LOG.log("Generating consensus with support={} for {}", optsupport, d['name'])
+#             d['adj'] = adj
+#             LOG.log("Current .adj file: {}.adj", adj)
+#             if not self.dry:
+#                 os.chdir(d['dirname'])
+#                 # os.rename(d['name'] + ".adj", d['name'] + ".orig.adj")
+#                 ACT.submit(script, done="../consensus.@.done")
+#                 os.chdir("..")
+#                 ncons += 1
+#         ACT.wait(("consensus.@.done", ncons))
 
-        ## Use compare_mi_histograms again to find optimal MI threshold
+#         ## Use compare_mi_histograms again to find optimal MI threshold
 
-        LOG.log("Comparing real and randomized datasets to determine optimal MI")
-        genereputils.generate_mi_histograms(ACT)
+#         LOG.log("Comparing real and randomized datasets to determine optimal MI")
+#         genereputils.generate_mi_histograms(ACT)
 
-        sum = 0
-        sumfpr = 0
-        n = 0
-        realmihist = ACT.real['mihist']
-        for d in ACT.datasets:
-            if not d['real']:
-                outfile = "{}.vs.{}.mi.hist.csv".format(ACT.real['name'], d['name'])
-                shmihist = d['mihist']
-                mi = genereputils.compare_mi_histograms(outfile, realmihist, shmihist)
-                LOG.log("Comparing {} and {}: maxDiff={} for mi={}, FPR={}", realmihist, shmihist, mi[0], mi[1], mi[2])
-                sum += mi[1]
-                sumfpr += mi[2]
-                n += 1
+#         sum = 0
+#         sumfpr = 0
+#         n = 0
+#         realmihist = ACT.real['mihist']
+#         for d in ACT.datasets:
+#             if not d['real']:
+#                 outfile = "{}.vs.{}.mi.hist.csv".format(ACT.real['name'], d['name'])
+#                 shmihist = d['mihist']
+#                 mi = genereputils.compare_mi_histograms(outfile, realmihist, shmihist)
+#                 LOG.log("Comparing {} and {}: maxDiff={} for mi={}, FPR={}", realmihist, shmihist, mi[0], mi[1], mi[2])
+#                 sum += mi[1]
+#                 sumfpr += mi[2]
+#                 n += 1
 
-        optmi = sum/n
-        fprmi = sumfpr/n
+#         optmi = sum/n
+#         fprmi = sumfpr/n
 
-        LOG.log("MI threshold: {} (fpr={})", optmi, fprmi)
+#         LOG.log("MI threshold: {} (fpr={})", optmi, fprmi)
 
-        ## Now filter the adj files with this threshold
-        nfilt = 0
-        for d in ACT.datasets:
-            LOG.log("Filtering dataset {} with MI={}", d['name'], optmi)
-            script = genereputils.write_filter_script(d['dirname'], d['name'], mi=optmi)
-            if not self.dry:
-                os.chdir(d['dirname'])
-                ACT.submit(script, done="../filter.@.done")
-                os.chdir("..")
-                nfilt += 1
-        ACT.wait(("filter.@.done", nfilt))
+#         ## Now filter the adj files with this threshold
+#         nfilt = 0
+#         for d in ACT.datasets:
+#             LOG.log("Filtering dataset {} with MI={}", d['name'], optmi)
+#             script = genereputils.write_filter_script(d['dirname'], d['name'], mi=optmi)
+#             if not self.dry:
+#                 os.chdir(d['dirname'])
+#                 ACT.submit(script, done="../filter.@.done")
+#                 os.chdir("..")
+#                 nfilt += 1
+#         ACT.wait(("filter.@.done", nfilt))
 
-        ## Use compare_mi_histograms again to find optimal sum(MI) threshold
+#         ## Use compare_mi_histograms again to find optimal sum(MI) threshold
 
-        LOG.log("Comparing real and randomized datasets to determine optimal sum(MI)")
-        genereputils.generate_mi_histograms(ACT, summi=True)
+#         LOG.log("Comparing real and randomized datasets to determine optimal sum(MI)")
+#         genereputils.generate_mi_histograms(ACT, summi=True)
 
-        sum = 0
-        sumfpr = 0
-        n = 0
-        realmihist = ACT.real['summihist']
-        for d in ACT.datasets:
-            if not d['real']:
-                outfile = "{}.vs.{}.summi.hist.csv".format(ACT.real['name'], d['name'])
-                shmihist = d['summihist']
-                mi = genereputils.compare_mi_histograms(outfile, realmihist, shmihist)
-                LOG.log("Comparing {} and {}: maxDiff={} for sumMI={}, FPR={}", realmihist, shmihist, mi[0], mi[1], mi[2])
-                sum += mi[1]
-                sumfpr += mi[2]
-                n += 1
+#         sum = 0
+#         sumfpr = 0
+#         n = 0
+#         realmihist = ACT.real['summihist']
+#         for d in ACT.datasets:
+#             if not d['real']:
+#                 outfile = "{}.vs.{}.summi.hist.csv".format(ACT.real['name'], d['name'])
+#                 shmihist = d['summihist']
+#                 mi = genereputils.compare_mi_histograms(outfile, realmihist, shmihist)
+#                 LOG.log("Comparing {} and {}: maxDiff={} for sumMI={}, FPR={}", realmihist, shmihist, mi[0], mi[1], mi[2])
+#                 sum += mi[1]
+#                 sumfpr += mi[2]
+#                 n += 1
 
-        optsummi = sum/n
-        fprsummi = sumfpr/n
+#         optsummi = sum/n
+#         fprsummi = sumfpr/n
 
-        LOG.log("SumMI threshold: {} (fpr={})", optsummi, fprsummi)
+#         LOG.log("SumMI threshold: {} (fpr={})", optsummi, fprsummi)
 
-        ## Now filter the adj files again with this threshold
-        nfilt = 0
-        for d in ACT.datasets:
-            LOG.log("Filtering dataset {} with sum(MI)={}", d['name'], optsummi)
-            script = genereputils.write_filter_script(d['dirname'], d['name'], summi=optsummi)
-            if not self.dry:
-                os.chdir(d['dirname'])
-                ACT.submit(script, done="../filter.@.done")
-                os.chdir("..")
-                nfilt += 1
-        ACT.wait(("filter.@.done", nfilt))
+#         ## Now filter the adj files again with this threshold
+#         nfilt = 0
+#         for d in ACT.datasets:
+#             LOG.log("Filtering dataset {} with sum(MI)={}", d['name'], optsummi)
+#             script = genereputils.write_filter_script(d['dirname'], d['name'], summi=optsummi)
+#             if not self.dry:
+#                 os.chdir(d['dirname'])
+#                 ACT.submit(script, done="../filter.@.done")
+#                 os.chdir("..")
+#                 nfilt += 1
+#         ACT.wait(("filter.@.done", nfilt))
 
-        ## Write final MI histogram
-        LOG.log("Comparing real and randomized datasets to generate final MI histogram.")
-        genereputils.generate_mi_histograms(ACT, final=True)
-        ## *** TODO: average final histograms into single one, or get apple.py to average them.
+#         ## Write final MI histogram
+#         LOG.log("Comparing real and randomized datasets to generate final MI histogram.")
+#         genereputils.generate_mi_histograms(ACT, final=True)
+#         ## *** TODO: average final histograms into single one, or get apple.py to average them.
         
-## Write stats on all adj files after each filtering step
-        genereputils.all_adj_stats(ACT, "adj-stats.csv")
-        with open("adj-stats.csv", "r") as f:
-            stats = f.read()
-        LOG.log("ADJ stats after each filtering step:\n{}", stats)
+# ## Write stats on all adj files after each filtering step
+#         genereputils.all_adj_stats(ACT, "adj-stats.csv")
+#         with open("adj-stats.csv", "r") as f:
+#             stats = f.read()
+#         LOG.log("ADJ stats after each filtering step:\n{}", stats)
 
-## Convert final adj file to cytoscape
-        final = ACT.real['dirname'] + "/" + ACT.real['name'] + ".summi.adj"
-        cyto = ACT.real['name'] + ".cyto.csv"
-        LOG.log("Converting final file {} to cytoscape file {}", final, cyto)
-        ACT.shell("module load dibig_tools; apple.py convert ac -f {} {}".format(final, cyto))
+# ## Convert final adj file to cytoscape
+#         final = ACT.real['dirname'] + "/" + ACT.real['name'] + ".summi.adj"
+#         cyto = ACT.real['name'] + ".cyto.csv"
+#         LOG.log("Converting final file {} to cytoscape file {}", final, cyto)
+#         ACT.shell("module load dibig_tools; apple.py convert ac -f {} {}".format(final, cyto))
 
-## If translation file specified, do translation
+# ## If translation file specified, do translation
 
-        if ACT.translation:
-            cytopre = cyto
-            cyto = ACT.real['name'] + ".tr.csv"
-            LOG.log("Translating gene names in {} to {} using map ../{}", cytopre, cyto, ACT.translation)
-            ACT.shell("module load dibig_tools; apple.py translate ../{} {} {}".format(ACT.translation, cytopre, cyto))
-            finalpre = final
-            final = ACT.real['name'] + ".tr.adj"
-            LOG.log("Converting translated file {} to {}", cyto, final)
-            ACT.shell("module load dibig_tools; apple.py convert ca {} {}".format(cyto, final))
+#         if ACT.translation:
+#             cytopre = cyto
+#             cyto = ACT.real['name'] + ".tr.csv"
+#             LOG.log("Translating gene names in {} to {} using map ../{}", cytopre, cyto, ACT.translation)
+#             ACT.shell("module load dibig_tools; apple.py translate ../{} {} {}".format(ACT.translation, cytopre, cyto))
+#             finalpre = final
+#             final = ACT.real['name'] + ".tr.adj"
+#             LOG.log("Converting translated file {} to {}", cyto, final)
+#             ACT.shell("module load dibig_tools; apple.py convert ca {} {}".format(cyto, final))
 
-## Produce connections file and CX file, and print top genes.
-        connections = ACT.real['name'] + ".conn.csv"
-        ACT.shell("module load dibig_tools; apple.py convert co {} {}".format(cyto, connections))
-        cxfile = ACT.real['name'] + ".cx"
+# ## Produce connections file and CX file, and print top genes.
+#         connections = ACT.real['name'] + ".conn.csv"
+#         ACT.shell("module load dibig_tools; apple.py convert co {} {}".format(cyto, connections))
+#         cxfile = ACT.real['name'] + ".cx"
         
-        if len(ACT.attributes) > 0:
-            with open("attributes.txt", "w") as out:
-                for a in ACT.attributes:
-                    out.write("{}: {}\n".format(a[0].capitalize(), a[1]))
-            afile = "-a attributes.txt"
-        else:
-            afile = ""
+#         afile = self.CXattributes(ACT)
+#         ACT.shell("module load dibig_tools; apple.py convert ax {} {} {}".format(afile, final, cxfile))
+#         cmdline = "cut -f 1,2 {} | head -{} > tophubs.txt".format(connections, ACT.tophubs)
+#         LOG.log("Executing: {}", cmdline)
+#         ACT.shell(cmdline)
+#         with open("tophubs.txt", "r") as f:
+#             tophubs = f.read().split()
+#         LOG.log("Top {} hubs by number of connections:\n".format(ACT.tophubs) + tophubs)
 
-        ACT.shell("module load dibig_tools; apple.py convert ax {} {} {}".format(afile, final, cxfile))
-        tophubs = ACT.shell("cut -f 1,2 {} | head -50".format(connections))
-        LOG.log("Top 50 hubs by number of connections:\n" + tophubs)
+#         LOG.log("Writing tophubnet.cy")
+#         ACT.shell("module load dibig_tools; apple.py extract -a -o tophubnet.cy {} tophubs.txt".format(final))
+#         cxfile = ACT.real['name'] + "-tophubs.cx"
+#         LOG.log("Converting tophubnet.cy to CX format file {}", cxfile)
 
-        return True
+#         ACT.shell("module load dibig_tools; apple.py cx {} tophubnet.cy {}".format(afile, cxfile))
+#         return True
 
 # Compression
 class GenerepCompress(Line):

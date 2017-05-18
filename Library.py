@@ -1027,6 +1027,54 @@ class BAMconcatenator(Line):
 
         return True
 
+### Kallisto
+
+class Kallisto(Line):
+    """Perform transcriptome quantification using Kallisto. Calls kallisto.qsub on the BAM files for each sample."""
+    name = "Kallisto"
+    version = ""
+    index = False
+    
+    def Setup(self):
+        ACT = self.actor
+        self.index = ACT.getConf("kallistoidx") or self.index
+        return self.index
+
+    def Verify(self):
+        ACT = self.actor
+        version = ACT.shell("module load kallisto; kallisto version")
+        if version.startswith("kallisto"):
+            p = version.rfind(" ")
+            self.version = version[p+1:]
+            return True
+        else:
+            return False
+
+    def Execute(self):
+        ACT = self.actor
+        LOG = ACT.log
+        SC = ACT.sc
+
+        nkall = 0
+        for smp in SC.samples:
+            smp['kallistodir'] = outdir = smp['name'] + ".kallisto.d"
+            ACT.mkdir(outdir)
+            cmdline = "kallisto.qsub {} {}".format(self.index, outdir)
+            for rs in smp['readsets']:
+                cmdline += " " + rs['left'] + " " + rs['right']
+            if not self.dry:
+                ACT.submit(cmdline, done="kall.@.done")
+                nkall += 1
+        ACT.wait(("kall.@.done", nkall))
+        nmat = 0
+        if not self.dry:
+            ACT.submit(writeMatrixScript("allgenematrix.qsub", SC.samples, "genes.rawmatrix.in.csv", mode='k'), done="raw.@.done")
+            nmat += 1
+        ACT.wait(("raw.@.done", nmat))
+        if not self.dry:
+            Utils.annotateFile("genes.rawmatrix.in.csv", "genes.rawmatrix.csv", ACT.txtable, annot=['gene_name', 'gene_biotype'], annotNames=['Gene', 'Biotype'])
+        return True
+
 ### RSEM 
 
 class RSEMquant(Line):
@@ -2421,6 +2469,7 @@ REGISTRY = {'test':       testLine,
             'markdup':    Markdup,
             'merge':      BAMmerger,
             'bamcat':     BAMconcatenator,
+            'kallisto':   Kallisto,
             'rsemquant':  RSEMquant,
             'rsemdiff':   RSEMdiff,
             'bamtowig':   BAMtoWig,
