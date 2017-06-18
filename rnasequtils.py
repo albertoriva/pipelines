@@ -3,6 +3,7 @@
 
 import math
 import Utils
+import Plots
 
 def writeMatrixScript(scriptfile, samples, outfile, mode='g', erccdb=False, column=None):
     """Write a qsub script to call 'rnaseqtools.py matrix' on the specified samples. Reads RSEM *.genes.results files
@@ -85,17 +86,19 @@ number of underexpressed, and a dictionary mapping each biotype to is number of 
                     k = parsed[0].strip('"')
                     if k in translation:
                         trans = translation[k]
-                        biot = trans['gene_biotype']
                         if biotype:
+                            biot = trans['gene_biotype']
                             if biotype != biot:
                                 good = False
                             else:
                                 Utils.dinc(biot, biotypes)
                     else:
-                        trans = missing
+                        good = False
                     if good:
-                        toAdd = [ trans[name] for name in wanted ]
-                        row = [log2fc] + toAdd + [str(log2fc), parsed[1], parsed[5], parsed[6]]
+                        toAdd = [ trans[tag] for tag in wanted ]
+                    else:
+                        toAdd = missing
+                    row = [log2fc] + toAdd + [str(log2fc), parsed[1], parsed[5], parsed[6]]
                 else:
                     row = [log2fc, parsed[0], str(log2fc), parsed[1], parsed[5], parsed[6]]
 
@@ -118,5 +121,29 @@ number of underexpressed, and a dictionary mapping each biotype to is number of 
             out.write("\t".join(d[1:]) + "\n")
     return (ng, nup, ndown, biotypes)
 
-### Generation of hub for RNA-seq data
+### Scatterplot for two columns of expression values
 
+def avgCols(row, columns, nc):
+    v = 0
+    for c in columns:
+        v += float(row[c])
+    return v/nc
+
+def exprScatterplot(filename, exprfile, cols1, cols2, label1=None, label2=None, fc=1):
+    data = []
+    nc1 = len(cols1)
+    nc2 = len(cols2)
+    with open(exprfile, "r") as f:
+        hdr = f.readline().rstrip("\r\n").split("\t")
+        label1 = label1 or hdr[cols1[0]]
+        label2 = label2 or hdr[cols2[0]]
+        for line in f:
+            parsed = line.rstrip("\r\n").split("\t")
+            v1 = avgCols(parsed, cols1, nc1)
+            v2 = avgCols(parsed, cols2, nc2)
+            data.append([ v1, v2 ])
+
+    p = Plots.Scatterplot(data=data, title='Scatterplot', ylabel=label1, xlabel=label2)
+    p.fc = fc
+    p.plot(filename)
+    return p

@@ -348,9 +348,10 @@ def runMethHist(ACT, cond1, cond2, outfile):
     SC = ACT.sc
     cnd1 = SC.findCondition(cond1)
     cnd2 = SC.findCondition(cond2)
-    cmdline = "module load dibig_tools; dmaptools.py histmeth {} {} {}".format(cnd1['matreport'], cnd2['matreport'], outfile)
-    ACT.shell(cmdline)
+    if ACT.missingOrStale(outfile, other=[cnd1['matreport'], cnd2['matreport']]):
+        cmdline = "module load dibig_tools; dmaptools.py histmeth {} {} {}".format(cnd1['matreport'], cnd2['matreport'], outfile)
+        ACT.shell(cmdline)
     if ACT.checkFile(outfile):
-        return Utils.fileToList(outfile)
+        return Utils.fileToList(outfile)[0]
     else:
         return None

@@ -1,4 +1,4 @@
-# MultiSampleActor
+# DibigActor
 
 # (c) 2015, A. Riva, DiBiG
 # Differential Methylation Analysis pipeline, v2.0
@@ -25,6 +25,10 @@ ACT.strand = ACT.getConf("strand")
 ACT.parallel = ACT.getConf("parallel", default="1")
 ACT.rrbs = ACT.getConf("RRBS", default=None)
 ACT.setSteps(ACT.getConf("steps"))
+
+## Trimming
+ACT.adapter = ACT.getConf("adapter")
+ACT.minlen = ACT.getConf("minlen")
 
 ## Filtering parameters
 ACT.sites = ACT.getConf("sites", section="filter")
@@ -63,7 +67,7 @@ D.setSteps(ACT.getConf("steps"))
 
 D.step('samples')
 D.step('fastqcount.1', outfile=ACT.fastqCountsPreTrim, propname="fastqCountsPre", delay=True)
-D.step('trim')
+D.step('trim', adapter=ACT.adapter, minlen=ACT.minlen)
 D.step('fastqcount.2', outfile=ACT.fastqCounts, propname="fastqCounts", delay=True)
 D.step('csfilter')
 D.step('fastqcount.3', outfile=ACT.fastqCountsFilter, propname="fastqCountsFilter", delay=True)
@@ -71,6 +75,7 @@ D.step('mmap')
 #if ACT.stepPresent('markdup') and ACT.rrbs == None:
 D.step('markdup')
 D.step('bamcount', outfile=ACT.alignedCounts, propname='beforeCounts', delay=True)
+D.step('bamcov')
 D.step('cscall')
 D.step('mcomp')
 D.step('dmr')

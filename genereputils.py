@@ -306,7 +306,7 @@ module load dibig_tools
 {}
 """.format(cmdline))
 
-    if ACT.missingOrStale(outfile, infile):              # *** Is this correct?
+    if True: #ACT.missingOrStale(outfile, infile):              # *** Is this correct?
         jid = ACT.submit(qsubfile, done="hist.@.done")
         return jid
     else:
@@ -326,7 +326,9 @@ def generate_mi_histograms(act, summi=False, final=False):
     act.wait(("hist.@.done", nhist))
 
     for d in datasets:
-        if summi:
+        if final:
+            histfile = d.finalhist
+        elif summi:
             histfile = d.summihist
         else:
             histfile = d.mihist
@@ -521,6 +523,8 @@ class GRFilterFinal(GRFilter):
 
         ## *** Hack: we're simply taking a random finalhist. We should use the averaged one from above.
         ACT.shell("module load dibig_tools; apple.py convert ac -f {} {} {}".format(finalhist, final, cyto))
+        ## Sort the resulting cytoscape file, otherwise later conversion to ADJ will fail.
+        ACT.shell("rm -f unsorted; mv {} unsorted; head -1 unsorted > {}; tail -n +2 unsorted | sort >> {}".format(cyto, cyto, cyto))
 
         ## If translation file specified, do translation
 
@@ -537,10 +541,11 @@ class GRFilterFinal(GRFilter):
         ## Produce connections file and CX file, and print top genes.
         connections = ACT.real.name + ".conn.csv"
         ACT.shell("module load dibig_tools; apple.py convert co {} {}".format(cyto, connections))
-        cxfile = ACT.real.name + ".cx"
 
+        cxfile = ACT.real.name + ".cx"
         afile = CXattributes(ACT)
-        ACT.shell("module load dibig_tools; apple.py convert ax {} {} {}".format(afile, final, cxfile))
+        dbfile = "-n " + ACT.genesdb if ACT.genesdb else ""
+        ACT.shell("module load dibig_tools; apple.py convert cx {} {} {} {}".format(afile, dbfile, cyto, cxfile))
         ACT.shell("cut -f 1,2 {} | head -{} > tophubs.txt".format(connections, ACT.tophubs))
         with open("tophubs.txt", "r") as f:
             tophubs = f.read()
@@ -548,11 +553,11 @@ class GRFilterFinal(GRFilter):
         LOG.log("Top {} hubs by number of connections:\n".format(ACT.tophubs) + tophubs)
 
         LOG.log("Writing tophubnet.cy")
-        ACT.shell("module load dibig_tools; apple.py extract -a -o tophubnet.cy {} tophubs.txt".format(final))
+        ACT.shell("module load dibig_tools; apple.py extract -a -c -o tophubnet.cy {} tophubs.txt".format(cyto))
         cxfile = ACT.real.name + "-tophubs.cx"
         LOG.log("Converting tophubnet.cy to CX format file {}", cxfile)
 
-        ACT.shell("module load dibig_tools; apple.py convert cx {} tophubnet.cy {}".format(afile, cxfile))
+        ACT.shell("module load dibig_tools; apple.py convert cx {} {} tophubnet.cy {}".format(afile, dbfile, cxfile))
 
         return True
 
@@ -560,7 +565,7 @@ def CXattributes(ACT):
     if len(ACT.attributes) > 0:
         with open("attributes.txt", "w") as out:
             for a in ACT.attributes:
-                out.write("{}: {}\n".format(a[0].capitalize(), a[1]))
+                out.write("{}: {}\n".format(a[0], a[1]))
             out.write("version: {}\n".format(date.today().isoformat()))
             out.write("networkType: Genetic interactions\n")
         return "-a attributes.txt"
